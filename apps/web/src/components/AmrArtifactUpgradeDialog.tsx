@@ -20,6 +20,10 @@ interface Props {
   installationId: string | null | undefined;
   onClose: () => void;
   onContinue: () => void;
+  /** Fires when the "don't show this again" preference is committed on exit,
+   * so the host can retract any upsell state it already issued (e.g. a home
+   * offer card waiting behind this dialog). */
+  onOptOut?: () => void;
 }
 
 const BENEFITS: ReadonlyArray<{
@@ -70,6 +74,7 @@ export function AmrArtifactUpgradeDialog({
   installationId,
   onClose,
   onContinue,
+  onOptOut,
 }: Props) {
   const t = useT();
   const analytics = useAnalytics();
@@ -80,9 +85,13 @@ export function AmrArtifactUpgradeDialog({
   const [offerCountdown, setOfferCountdown] = useState<OfferCountdown | null>(null);
 
   // Committed on every exit path (plans, continue, close, Escape) so a checked
-  // box always sticks, mirroring the low-balance warn opt-out.
+  // box always sticks, mirroring the low-balance warn opt-out. The host is
+  // notified so upsell state issued BEFORE the commit (a home offer card
+  // parked behind this dialog) is retracted instead of resurfacing later.
   const commitOptOut = () => {
-    if (optOutRef.current?.checked) setAmrArtifactUpgradeOptedOut();
+    if (!optOutRef.current?.checked) return;
+    setAmrArtifactUpgradeOptedOut();
+    onOptOut?.();
   };
   const closeDialog = () => {
     commitOptOut();

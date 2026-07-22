@@ -554,4 +554,56 @@ describe('AmrArtifactUpgradeGate', () => {
       expect.objectContaining({ sessionKey: expect.any(String) }),
     );
   });
+
+  it('retracts an already issued Home offer when the dialog opt-out commits', async () => {
+    const onHomeOfferChange = vi.fn();
+    const view = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+
+    // A Home offer goes out for the first artifact session...
+    act(() => publishFinishedRun());
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await waitFor(() => expect(onHomeOfferChange).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: JSON.stringify(['project-1', 'conversation-1']) }),
+    ));
+
+    // ...the user returns to a project without dismissing the card and opts
+    // out via the dialog of another eligible session.
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        activeConversationId="conversation-2"
+        activeFileName="live:artifact-2"
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    act(() => publishFinishedRun({ runId: 'run-2', conversationId: 'conversation-2' }));
+    const decision = requestSend('project-1', 'conversation-2');
+    await waitFor(() => expect(screen.getByTestId('amr-artifact-upgrade-dialog')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-optout'));
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
+    await expect(decision).resolves.toBe('proceed');
+
+    // The stored offer is cleared, not just future ones suppressed.
+    expect(onHomeOfferChange).toHaveBeenLastCalledWith(null);
+  });
 });

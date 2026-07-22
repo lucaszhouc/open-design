@@ -284,6 +284,10 @@ export function AmrArtifactUpgradeGate({
       profile={profile}
       metricsConsent={metricsConsent}
       installationId={installationId}
+      // A committed opt-out must also retract upsell state issued BEFORE the
+      // commit: a home offer already handed to the app shell would otherwise
+      // resurface on the next home visit despite the persisted preference.
+      onOptOut={() => onHomeOfferChange?.(null)}
       onClose={() => settleDialog('cancel')}
       onContinue={() => settleDialog('proceed')}
     />
