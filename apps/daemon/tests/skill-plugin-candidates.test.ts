@@ -16,6 +16,7 @@ import {
   generateSkillPluginDraft,
   insertSkillPluginCandidate,
   listSkillPluginCandidates,
+  sanitizeLocalContext,
 } from '../src/plugins/skill-candidates.js';
 import {
   detectSkillPluginCandidateOnRunSuccess,
@@ -287,6 +288,111 @@ describe('skill plugin candidates', () => {
     ]);
   });
 
+  it('scrubs local context from the synthesized draft but keeps reference sources verbatim', async () => {
+    await writeFile(
+      path.join(projectRoot, 'SKILL.md'),
+      [
+        '# Path leak skill',
+        '',
+        'Use this skill with the notes kept in C:\\Users\\alice\\AppData\\Roaming\\od\\notes.md when the workflow repeats.',
+        '',
+        '## Workflow',
+        '',
+        '- Read /Users/alice/Library/refs.md and \\\\fileserver\\share\\brief.md first.',
+        '- Send open questions to alice@example.com.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const db = openDatabase(tmpDir, { dataDir: path.join(tmpDir, 'data') });
+    insertProject(db, {
+      id: 'proj_1',
+      name: 'Candidate project',
+      skillId: null,
+      designSystemId: null,
+      pendingPrompt: null,
+      metadata: { kind: 'prototype' },
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const detected = await detectSkillPluginCandidate({
+      projectId: 'proj_1',
+      runId: 'run_1',
+      conversationId: 'conv_1',
+      message: 'Please use @SKILL.md for this run.',
+      projectRoot,
+      now: 10,
+    });
+    const candidate = insertSkillPluginCandidate(db, detected!);
+
+    const result = await generateSkillPluginDraft(db, projectRoot, 'proj_1', candidate!.id, 20);
+    expect(result?.ok).toBe(true);
+
+    const skill = await readFile(path.join(result!.folder, 'SKILL.md'), 'utf8');
+    expect(skill).not.toContain('C:\\Users');
+    expect(skill).not.toContain('/Users/alice');
+    expect(skill).not.toContain('\\\\fileserver');
+    expect(skill).toContain('<local-path>');
+
+    const manifest = JSON.parse(await readFile(path.join(result!.folder, 'open-design.json'), 'utf8'));
+    expect(manifest.description).toContain('<local-path>');
+    expect(manifest.description).not.toContain('C:\\Users');
+
+    const reference = await readFile(path.join(result!.folder, 'references', 'source-1-SKILL.md'), 'utf8');
+    expect(reference).toContain('C:\\Users\\alice\\AppData\\Roaming\\od\\notes.md');
+    expect(reference).toContain('/Users/alice/Library/refs.md');
+    expect(reference).toContain('alice@example.com');
+
+    const warning = result!.validation.diagnostics.find((d) => d.code === 'references.local-context');
+    expect(warning?.severity).toBe('warning');
+    expect(warning?.message).toContain('references/source-1-SKILL.md');
+    expect(warning?.message).toMatch(/review/iu);
+  });
+
+  it('does not warn about references without local context', async () => {
+    await writeFile(
+      path.join(projectRoot, 'SKILL.md'),
+      [
+        '# Clean skill',
+        '',
+        'Use this skill when a reusable research workflow should collect sources and produce a concise brief.',
+        '',
+        '## Workflow',
+        '',
+        '- Read the supplied source material.',
+        '- Return a structured brief.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const db = openDatabase(tmpDir, { dataDir: path.join(tmpDir, 'data') });
+    insertProject(db, {
+      id: 'proj_1',
+      name: 'Candidate project',
+      skillId: null,
+      designSystemId: null,
+      pendingPrompt: null,
+      metadata: { kind: 'prototype' },
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    const detected = await detectSkillPluginCandidate({
+      projectId: 'proj_1',
+      message: 'Please use @SKILL.md for this run.',
+      projectRoot,
+      now: 10,
+    });
+    const candidate = insertSkillPluginCandidate(db, detected!);
+
+    const result = await generateSkillPluginDraft(db, projectRoot, 'proj_1', candidate!.id, 20);
+    expect(result?.ok).toBe(true);
+    expect(result!.validation.diagnostics.filter((d) => d.code === 'references.local-context')).toHaveLength(0);
+  });
+
   it('defers the CTA when the matching run only asks a question form', async () => {
     const db = openDatabase(tmpDir, { dataDir: path.join(tmpDir, 'data') });
     insertProject(db, {
@@ -360,6 +466,33 @@ describe('skill plugin candidates', () => {
       'assistant_final',
       shown?.assistantMessageId,
     ]);
+  });
+});
+
+describe('sanitizeLocalContext', () => {
+  it('replaces Windows drive-letter paths with both separators', () => {
+    expect(sanitizeLocalContext('Data lives in C:\\Users\\alice\\AppData\\Roaming\\od and D:/work/repo today.'))
+      .toBe('Data lives in <local-path> and <local-path> today.');
+  });
+
+  it('replaces UNC paths', () => {
+    expect(sanitizeLocalContext('Shared brief at \\\\fileserver\\design\\brief.md for review.'))
+      .toBe('Shared brief at <local-path> for review.');
+  });
+
+  it('replaces POSIX user directories', () => {
+    expect(sanitizeLocalContext('Logs in /Users/alice/Library/Logs and config in /home/bob/.config/tool.'))
+      .toBe('Logs in <local-path> and config in <local-path>.');
+  });
+
+  it('keeps non-path words, URLs, and relative paths intact', () => {
+    const text = 'See https://github.com/foo/bar/blob/main/SKILL.md, the references/ folder, a 16:9 ratio, and the C: drive.';
+    expect(sanitizeLocalContext(text)).toBe(text);
+  });
+
+  it('keeps sentence punctuation after a scrubbed path', () => {
+    expect(sanitizeLocalContext('Copy C:\\Users\\alice\\notes.md. Then continue.'))
+      .toBe('Copy <local-path>. Then continue.');
   });
 });
 

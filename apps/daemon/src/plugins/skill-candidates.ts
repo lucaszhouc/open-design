@@ -15,6 +15,48 @@ type DbRow = Record<string, unknown>;
 const MAX_SOURCE_BYTES = 96_000;
 const SAFE_SLUG = /^[a-z0-9][a-z0-9._-]*$/;
 
+// Absolute local filesystem path tokens leak the author's machine context
+// (usernames, project layout) into drafts that can be contributed publicly.
+// Order matters: UNC before drive-letter so `\\server\share` is consumed
+// whole; drive-letter before POSIX so `C:/Users/...` is treated as one
+// Windows token instead of a bare `/Users/...` suffix.
+const LOCAL_PATH_PATTERNS: RegExp[] = [
+  // UNC paths: \\server\share\dir\file
+  /\\\\[^\s"'`<>|)\]},;]+/gu,
+  // Drive-letter paths with either separator: C:\Users\me, D:/work/repo
+  /\b[A-Za-z]:[\\/][^\s"'`<>|)\]},;]+/gu,
+  // POSIX user directories: /Users/<name>/..., /home/<name>/...
+  // The lookbehind keeps URL path segments (…github.com/Users/…) intact.
+  /(?<![\w.~-])\/(?:Users|home)\/[^\s"'`<>|)\]},;]+/gu,
+];
+
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/u;
+
+const LOCAL_PATH_REPLACEMENT = '<local-path>';
+
+// Scrub absolute local filesystem paths from text that ends up in the
+// synthesized draft (SKILL.md, manifest title/description). Sentence
+// punctuation glued to the end of a path token is preserved so prose
+// stays readable.
+export function sanitizeLocalContext(text: string): string {
+  let out = text;
+  for (const pattern of LOCAL_PATH_PATTERNS) {
+    out = out.replace(pattern, (match) => {
+      const trailing = /[.:!?]+$/u.exec(match)?.[0] ?? '';
+      return `${LOCAL_PATH_REPLACEMENT}${trailing}`;
+    });
+  }
+  return out;
+}
+
+// Detection twin of sanitizeLocalContext, extended with email addresses.
+// Used to flag verbatim reference copies that need a human review pass
+// before the draft leaves the machine.
+function containsLocalContext(text: string): boolean {
+  return LOCAL_PATH_PATTERNS.some((pattern) => new RegExp(pattern.source, 'u').test(text))
+    || EMAIL_PATTERN.test(text);
+}
+
 export interface DetectSkillPluginCandidateInput {
   projectId: string;
   runId?: string | null;
@@ -165,7 +207,7 @@ export async function generateSkillPluginDraft(
   const draftPath = `plugin-source/${slug}`;
   const folder = path.join(projectRoot, ...draftPath.split('/'));
   await fs.mkdir(path.join(folder, 'references'), { recursive: true });
-  await fs.writeFile(path.join(folder, 'SKILL.md'), synthesizeSkill(candidate), 'utf8');
+  await fs.writeFile(path.join(folder, 'SKILL.md'), sanitizeLocalContext(synthesizeSkill(candidate)), 'utf8');
   await fs.writeFile(path.join(folder, 'open-design.json'), JSON.stringify(buildManifest(slug, candidate), null, 2) + '\n', 'utf8');
   await fs.writeFile(path.join(folder, 'references', 'provenance.json'), JSON.stringify({
     candidateId: candidate.id,
@@ -176,11 +218,18 @@ export async function generateSkillPluginDraft(
     sourceRefs: candidate.sourceRefs.map((ref) => ({ ...ref, content: undefined })),
   }, null, 2) + '\n', 'utf8');
   let copied = 0;
+  // Reference copies stay verbatim for provenance — they are the audit
+  // trail for what the draft was synthesized from. Anything that looks
+  // like local machine context (absolute paths, email addresses) is
+  // surfaced as a review warning instead of being rewritten.
+  const flaggedReferences: string[] = [];
   for (const ref of candidate.sourceRefs) {
     if (ref.kind !== 'file' || typeof ref.content !== 'string') continue;
     if (Buffer.byteLength(ref.content, 'utf8') > MAX_SOURCE_BYTES) continue;
     copied += 1;
-    await fs.writeFile(path.join(folder, 'references', `source-${copied}-${path.basename(ref.value) || 'source.md'}`), ref.content, 'utf8');
+    const referenceName = `source-${copied}-${path.basename(ref.value) || 'source.md'}`;
+    await fs.writeFile(path.join(folder, 'references', referenceName), ref.content, 'utf8');
+    if (containsLocalContext(ref.content)) flaggedReferences.push(`references/${referenceName}`);
   }
   const validationResult = await validatePluginFolder({ folder });
   const diagnostics = flattenValidationDiagnostics(validationResult).map((d) => ({
@@ -188,6 +237,13 @@ export async function generateSkillPluginDraft(
     code: d.code,
     message: d.message,
   }));
+  for (const reference of flaggedReferences) {
+    diagnostics.push({
+      severity: 'warning' as const,
+      code: 'references.local-context',
+      message: `${reference} contains absolute local paths or email addresses. It is copied verbatim for provenance; review it and remove anything personal before contributing this draft publicly.`,
+    });
+  }
   db.prepare(
     `UPDATE skill_plugin_candidates
         SET draft_path = ?, updated_at = ?
@@ -359,9 +415,12 @@ function buildManifest(slug: string, candidate: SkillPluginCandidate) {
     $schema: 'https://open-design.ai/schemas/plugin.v1.json',
     specVersion: OPEN_DESIGN_PLUGIN_SPEC_VERSION,
     name: slug,
-    title: candidate.title,
+    // Title and description are derived from raw candidate text, which in
+    // practice can quote absolute paths from the author's machine. Scrub
+    // them before they land in a manifest that may be contributed publicly.
+    title: sanitizeLocalContext(candidate.title),
     version: '0.1.0',
-    description: candidate.description,
+    description: sanitizeLocalContext(candidate.description),
     od: {
       kind: 'skill',
       taskKind: 'new-generation',
