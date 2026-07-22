@@ -4376,6 +4376,20 @@ export async function startServer({
       }
       throw err;
     }
+    // Manual context compaction (POST .../conversations/:cid/compact). The
+    // run must deliver the runtime's own compact command as the SOLE user
+    // message of a RESUMED session — any composed wrapper (`# Instructions`,
+    // `# User request`) demotes it to literal user text — so the flag
+    // short-circuits prompt composition below and the resume guard after
+    // `agentResumeCtx` refuses when there is no session to compact.
+    const manualCompactRun = chatBody.manualCompact === true;
+    if (manualCompactRun && typeof def.manualCompact?.prompt !== 'string') {
+      return design.runs.fail(
+        run,
+        'COMPACT_UNSUPPORTED',
+        `agent ${def.id} does not support manual context compaction`,
+      );
+    }
     const safeCommentAttachments =
       normalizeCommentAttachments(commentAttachments);
     if (
@@ -5022,6 +5036,19 @@ export async function startServer({
       invalidationReason: agentResumeCtx.invalidationReason,
     });
     publishNativeSessionRecoveryMetadata();
+    // A compact run only makes sense against an existing resumable session:
+    // without one the adapter would mint a NEW session and the compact
+    // command would run against empty history (or, worse, the invalidated
+    // session would be reseeded and the compaction wasted). The route
+    // pre-checks the stored session for fast UX; this guard is the
+    // race-safe authority (covers invalidation between check and spawn).
+    if (manualCompactRun && !agentResumeCtx.isResuming) {
+      return design.runs.fail(
+        run,
+        'COMPACT_NO_SESSION',
+        'no resumable agent session for this conversation - send a message first',
+      );
+    }
     const userRequestPrompt = composeChatUserRequestForAgent(
       message,
       currentPrompt,
@@ -5128,7 +5155,11 @@ export async function startServer({
       safeImages,
       amrStagedImages,
     );
-    const composed = [
+    // Manual compact runs bypass composition entirely: the runtime CLI only
+    // executes its compact command when the user message is EXACTLY that
+    // command (verified for claude — `# User request\n\n/compact` is treated
+    // as literal user text, bare `/compact` compacts).
+    const composed = manualCompactRun ? def.manualCompact.prompt : [
       instructionPrompt
         ? `# Instructions (read first)\n\n${formOverride}${instructionPrompt}${cwdHint}${linkedDirsHint}${ECHO_GUARD}\n\n---\n`
         : cwdHint
@@ -6151,12 +6182,24 @@ export async function startServer({
           // new max position (otherwise the next turn sees `cursor + 4` and
           // falsely reseeds). model/cwd are unchanged (they matched on resume);
           // refresh the stable hash to what the session now holds.
+          //
+          // Manual compact turns bypass composition, so they deliver NO stable
+          // instruction block: keep the STORED hash/sections instead of
+          // claiming the session now holds `currentStableHash` — otherwise a
+          // pending stable-instructions change would be silently skipped on
+          // the next normal turn.
           upsertAgentSession(db, {
             conversationId: run.conversationId,
             agentId: def.id,
             sessionId: agentResumeCtx.resumeSessionId,
-            stablePromptHash: currentStableHash,
-            stablePromptSections: currentStableSectionsJson,
+            stablePromptHash: manualCompactRun
+              ? agentResumeCtx.storedStablePromptHash
+              : currentStableHash,
+            stablePromptSections: manualCompactRun
+              ? (agentResumeCtx.storedStableSections
+                  ? serializeStableSections(agentResumeCtx.storedStableSections)
+                  : null)
+              : currentStableSectionsJson,
             model: safeModel ?? null,
             cwd: effectiveCwd,
             lastMessageId: run.assistantMessageId ?? null,
@@ -7731,9 +7774,14 @@ export async function startServer({
       // Empty-output guard: a clean `code === 0` exit with no visible
       // output means the run silently finished without producing anything.
       // Surface an explicit failure so the chat shows a clear reason.
+      //
+      // Manual compact runs are exempt: a successful compaction legitimately
+      // produces NO assistant text — the CLI emits only status frames
+      // (`compacting`, `compact_boundary`) and a clean result frame.
       if (
         code === 0 &&
         !run.cancelRequested &&
+        !manualCompactRun &&
         trackingSubstantiveOutput &&
         !agentProducedOutput
       ) {
