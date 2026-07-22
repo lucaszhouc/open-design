@@ -55,6 +55,7 @@ export interface SkillPluginCandidateLike {
   title?: string | null;
   description?: string | null;
   confidence?: number | null;
+  sourceRefs?: Array<{ kind?: string; value?: string; label?: string | null }> | null;
   draftPath?: string | null;
 }
 
@@ -415,6 +416,12 @@ export function upsertSkillPluginCandidateAssistantMessage(
       description: candidate.description,
       confidence: candidate.confidence,
       draftPath: candidate.draftPath ?? null,
+      // Source-ref labels ride along so the web card's contribute consent
+      // step can list the files a public PR would contain without another
+      // round trip to the daemon.
+      sourceRefLabels: (candidate.sourceRefs ?? [])
+        .map((ref) => (ref.label || ref.value || '').trim())
+        .filter((label) => label.length > 0),
     }],
     createdAt: now,
     endedAt: now,

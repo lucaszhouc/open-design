@@ -635,6 +635,11 @@ export type PersistedAgentEvent =
       description?: string;
       confidence?: number;
       draftPath?: string | null;
+      /** Display labels of the candidate's source refs. Lets the contribute
+       *  consent step list exactly which files a public PR would contain
+       *  without an extra fetch. Absent on messages persisted before this
+       *  field existed. */
+      sourceRefLabels?: string[];
     }
   | {
       kind: 'usage';

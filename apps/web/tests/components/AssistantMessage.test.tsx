@@ -98,6 +98,57 @@ describe('AssistantMessage feedback gate', () => {
     expect(screen.getByRole('button', { name: 'Create plugin/template' })).toBeTruthy();
   });
 
+  it('requires explicit consent before the contribute call fires', () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const message = baseMessage({
+      content: '',
+      events: [
+        {
+          kind: 'plugin_candidate',
+          candidateId: 'candidate-consent',
+          title: 'Design review helper',
+          description: 'Turn this repository workflow into a reusable helper.',
+          sourceRefLabels: ['notes/skill-notes.md'],
+        } as ChatMessage['events'][number],
+      ],
+    });
+
+    render(
+      <AssistantMessage
+        message={message}
+        streaming={false}
+        projectId="proj-1"
+      />,
+    );
+
+    // First click opens the consent panel locally - no network call yet.
+    fireEvent.click(screen.getByRole('button', { name: 'Contribute to open-design' }));
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    const consent = screen.getByTestId('skill-plugin-candidate-consent-candidate-consent');
+    expect(consent.textContent).toContain('publish the files listed below to that public fork');
+    expect(consent.textContent).toContain('pre-filled pull request form');
+    expect(consent.textContent).toContain('notes/skill-notes.md');
+    expect(consent.textContent).toContain('SKILL.md');
+    expect(consent.textContent).toContain('open-design.json');
+
+    // Confirm stays disabled until both attestations are checked.
+    const confirm = screen.getByRole('button', { name: 'Fork and open pull request' });
+    expect(confirm.hasAttribute('disabled')).toBe(true);
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[0]!);
+    expect(confirm.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(checkboxes[1]!);
+    expect(confirm.hasAttribute('disabled')).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    // Cancel returns to the initial state without firing anything.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByTestId('skill-plugin-candidate-consent-candidate-consent')).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('omits the repeated identity header for a consecutive assistant reply', () => {
     const { container } = render(
       <AssistantMessage

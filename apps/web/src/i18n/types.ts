@@ -1410,6 +1410,11 @@ export interface Dict {
   'skillPluginCandidate.createForMe': string;
   'skillPluginCandidate.contributeToMain': string;
   'skillPluginCandidate.repoDescription': string;
+  'skillPluginCandidate.confirmIntro': string;
+  'skillPluginCandidate.confirmFilesLabel': string;
+  'skillPluginCandidate.confirmRights': string;
+  'skillPluginCandidate.confirmReviewed': string;
+  'skillPluginCandidate.confirmSubmit': string;
   'integrations.kicker': string;
   'integrations.lede': string;
   'integrations.agentReady': string;

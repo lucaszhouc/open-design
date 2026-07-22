@@ -1088,6 +1088,11 @@ export const zhCN: Dict = {
   "skillPluginCandidate.createForMe": "创建插件/模板",
   "skillPluginCandidate.contributeToMain": "贡献到 open-design",
   "skillPluginCandidate.repoDescription": "这个仓库看起来可以做成插件。",
+  "skillPluginCandidate.confirmIntro": "贡献操作会以你自己的 GitHub 账号 fork nexu-io/open-design，把下方列出的文件发布到该公开 fork，然后在 GitHub 上打开一个预填好的 Pull Request 表单。",
+  "skillPluginCandidate.confirmFilesLabel": "Pull Request 将包含以下文件：",
+  "skillPluginCandidate.confirmRights": "我拥有发布这些内容的权利。",
+  "skillPluginCandidate.confirmReviewed": "我已检查这些文件，其中不包含任何个人或隐私数据。",
+  "skillPluginCandidate.confirmSubmit": "Fork 并发起 Pull Request",
   "integrations.kicker": "集成",
   "integrations.lede":
     "连接外部系统，把 MCP 工具带入智能体循环，并在其它 IDE、脚本和自动化中使用 Open Design。",

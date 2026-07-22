@@ -210,7 +210,19 @@ function SkillPluginCandidateCard({
   const t = useT();
   const [busy, setBusy] = useState<null | "draft" | "contribute">(null);
   const [notice, setNotice] = useState<ActionNotice | null>(null);
+  // Contribute is a two-step flow: the first click only opens a local
+  // consent panel explaining that a public fork + PR will be created under
+  // the user's GitHub account. The network call fires from the panel's
+  // confirm button, and only once both attestations are checked.
+  const [confirmingContribute, setConfirmingContribute] = useState(false);
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [reviewConfirmed, setReviewConfirmed] = useState(false);
   const disabled = !projectId || busy !== null;
+  const contributeFiles = Array.from(new Set([
+    ...(block.sourceRefLabels ?? []),
+    "SKILL.md",
+    "open-design.json",
+  ]));
   const description =
     block.description === "Reusable skill material detected from a repository link." ||
     block.description === "This repo looks like it could work as a plugin."
@@ -269,6 +281,18 @@ function SkillPluginCandidateCard({
     }
   }
 
+  function beginContribute() {
+    setNotice(null);
+    setConfirmingContribute(true);
+  }
+
+  function cancelContribute() {
+    setConfirmingContribute(false);
+    setRightsConfirmed(false);
+    setReviewConfirmed(false);
+    setNotice(null);
+  }
+
   async function share(action: "contribute-open-design") {
     if (!projectId) return;
     setBusy("contribute");
@@ -278,6 +302,9 @@ function SkillPluginCandidateCard({
         `/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(block.candidateId)}/share-tasks`,
         { action },
       );
+      setConfirmingContribute(false);
+      setRightsConfirmed(false);
+      setReviewConfirmed(false);
       setNotice({
         message: `Open Design contribution task started for ${data?.path ?? "the draft"}.`,
       });
@@ -299,8 +326,9 @@ function SkillPluginCandidateCard({
           <button
             type="button"
             className="plugin-action-button"
-            disabled={disabled}
-            onClick={() => void share("contribute-open-design")}
+            disabled={disabled || confirmingContribute}
+            aria-expanded={confirmingContribute}
+            onClick={() => beginContribute()}
           >
             <Icon name={busy === "contribute" ? "spinner" : "share"} size={13} />
             <span>{busy === "contribute" ? "Starting..." : t("skillPluginCandidate.contributeToMain")}</span>
@@ -320,7 +348,69 @@ function SkillPluginCandidateCard({
             </button>
           </div>
         }
-        status={notice ? (
+        status={confirmingContribute ? (
+          <div
+            className="plugin-action-candidate__consent"
+            data-testid={`skill-plugin-candidate-consent-${block.candidateId}`}
+          >
+            <p className="plugin-action-candidate__consent-intro">
+              {t("skillPluginCandidate.confirmIntro")}
+            </p>
+            <p className="plugin-action-candidate__consent-files-label">
+              {t("skillPluginCandidate.confirmFilesLabel")}
+            </p>
+            <ul className="plugin-action-candidate__consent-files">
+              {contributeFiles.map((file) => (
+                <li key={file}>
+                  <Icon name="file-text" size={12} />
+                  <span>{file}</span>
+                </li>
+              ))}
+            </ul>
+            <label className="plugin-action-candidate__consent-check">
+              <input
+                type="checkbox"
+                checked={rightsConfirmed}
+                disabled={busy !== null}
+                onChange={(event) => setRightsConfirmed(event.target.checked)}
+              />
+              <span>{t("skillPluginCandidate.confirmRights")}</span>
+            </label>
+            <label className="plugin-action-candidate__consent-check">
+              <input
+                type="checkbox"
+                checked={reviewConfirmed}
+                disabled={busy !== null}
+                onChange={(event) => setReviewConfirmed(event.target.checked)}
+              />
+              <span>{t("skillPluginCandidate.confirmReviewed")}</span>
+            </label>
+            <div className="plugin-action-candidate__consent-actions">
+              <button
+                type="button"
+                className="plugin-action-button plugin-action-button--primary"
+                disabled={disabled || !rightsConfirmed || !reviewConfirmed}
+                onClick={() => void share("contribute-open-design")}
+              >
+                <Icon name={busy === "contribute" ? "spinner" : "share"} size={13} />
+                <span>{busy === "contribute" ? "Starting..." : t("skillPluginCandidate.confirmSubmit")}</span>
+              </button>
+              <button
+                type="button"
+                className="plugin-action-button"
+                disabled={busy !== null}
+                onClick={() => cancelContribute()}
+              >
+                <span>{t("common.cancel")}</span>
+              </button>
+            </div>
+            {notice ? (
+              <span role="status">
+                <ActionNoticeView notice={notice} />
+              </span>
+            ) : null}
+          </div>
+        ) : notice ? (
           <span role="status">
             <ActionNoticeView notice={notice} />
           </span>
@@ -3850,6 +3940,7 @@ type Block =
       description?: string | undefined;
       confidence?: number | undefined;
       draftPath?: string | null | undefined;
+      sourceRefLabels?: string[] | undefined;
     }
   | { kind: "status"; label: string; detail?: string | undefined };
 
@@ -3994,6 +4085,7 @@ function buildBlocks(events: AgentEvent[]): Block[] {
         description: ev.description,
         confidence: ev.confidence,
         draftPath: ev.draftPath,
+        sourceRefLabels: ev.sourceRefLabels,
       });
       continue;
     }

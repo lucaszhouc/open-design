@@ -285,6 +285,72 @@
   margin: 0;
 }
 
+/* Contribute consent step — rendered before the contribute call fires so
+   the user understands a public fork + PR is about to be created under
+   their own GitHub account. Reuses the candidate card's quiet notice
+   palette; only the final confirm button is accented. */
+.plugin-action-candidate__consent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.plugin-action-candidate__consent p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+.plugin-action-candidate__consent-files {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.plugin-action-candidate__consent-files li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+.plugin-action-candidate__consent-files li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-action-candidate__consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text);
+  cursor: pointer;
+}
+.plugin-action-candidate__consent-check input {
+  /* The primitives.css `input` rule sets width: 100% and panel chrome;
+     reset to a fixed native checkbox like .library-import-checkbox does. */
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin: 2px 0 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+.plugin-action-candidate__consent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 /* "Files this turn" summary — derived from file operation tool_use events.
    Show up to four files as part of the answer; larger batches stay compact
    until the user opens the disclosure. */

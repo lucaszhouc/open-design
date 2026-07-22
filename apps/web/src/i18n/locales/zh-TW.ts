@@ -1091,6 +1091,11 @@ export const zhTW: Dict = {
   "skillPluginCandidate.createForMe": "建立外掛/範本",
   "skillPluginCandidate.contributeToMain": "貢獻到 open-design",
   "skillPluginCandidate.repoDescription": "這個倉庫看起來可以做成外掛。",
+  "skillPluginCandidate.confirmIntro": "貢獻操作會以你自己的 GitHub 帳號 fork nexu-io/open-design，把下方列出的檔案發佈到該公開 fork，然後在 GitHub 上開啟一個預先填好的 Pull Request 表單。",
+  "skillPluginCandidate.confirmFilesLabel": "Pull Request 將包含以下檔案：",
+  "skillPluginCandidate.confirmRights": "我擁有發布這些內容的權利。",
+  "skillPluginCandidate.confirmReviewed": "我已檢查這些檔案，其中不包含任何個人或隱私資料。",
+  "skillPluginCandidate.confirmSubmit": "Fork 並發起 Pull Request",
   "integrations.kicker": "整合",
   "integrations.lede":
     "連接外部系統，把 MCP 工具帶入智能體迴圈，並在其他 IDE、腳本與自動化流程中使用 Open Design。",
