@@ -55,24 +55,27 @@
   overflow-wrap: break-word;
 }
 
-/* Quiet permanent counterpart of the close control: plain text link under the
- * message, styled to read as meta copy rather than a third CTA. */
-.dontShowAgain {
-  display: inline-block;
+/* Quiet permanent counterpart of the close control: a ghost Button restyled
+ * as a text link under the message, so it reads as meta copy rather than a
+ * third CTA while keeping the primitive's focus-visible ring. Scoped under
+ * .card to out-weigh the primitive's base/ghost chrome, like .secondaryCta. */
+.card .dontShowAgain {
+  display: inline-flex;
   margin-top: 2px;
   padding: 0;
   color: var(--text-muted);
-  border: none;
-  background: none;
+  border-color: transparent;
+  background: transparent;
   font-size: 11.5px;
   line-height: 1.4;
   text-decoration: underline;
   text-underline-offset: 2px;
-  cursor: pointer;
 }
 
-.dontShowAgain:hover {
+.card .dontShowAgain:hover:not(:disabled) {
   color: var(--text);
+  border-color: transparent;
+  background: transparent;
 }
 
 .actions {

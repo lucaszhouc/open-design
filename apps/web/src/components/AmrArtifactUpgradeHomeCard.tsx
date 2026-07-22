@@ -82,14 +82,14 @@ export function AmrArtifactUpgradeHomeCard({
         <p id={descriptionId} className={styles.message}>
           {t('chat.amrArtifactUpgrade.homeMessage')}
         </p>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
           className={styles.dontShowAgain}
           onClick={dismissForever}
           data-testid="amr-artifact-upgrade-home-dont-show-again"
         >
           {t('chat.amrArtifactUpgrade.dontShowAgain')}
-        </button>
+        </Button>
       </div>
       <div className={styles.actions}>
         <Button
