@@ -43,6 +43,7 @@ export const it: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'La tua creazione è pronta. Porta più lontano la prossima idea.',
   'chat.amrArtifactUpgrade.homeMessage': 'Passa a modelli più potenti, più attività in parallelo e più crediti mensili.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Vedi creazione',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Non mostrare più',
   'chat.antigravityError.launchTerminalCta': 'Accedi tramite terminale',
   'chat.antigravityError.launchSwitchModelCta': 'Cambia modello nel terminale',
   'chat.connectionDropped': 'La connessione al servizio del modello è caduta prima del completamento della risposta, di solito a causa di una rete o di un proxy instabili. Riprova.',

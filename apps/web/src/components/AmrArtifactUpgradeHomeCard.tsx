@@ -9,6 +9,7 @@ import {
 } from '../analytics/amr-attribution';
 import { useT } from '../i18n';
 import { amrPlansUrlForProfile } from '../runtime/amr-guidance';
+import { setAmrArtifactUpgradeOptedOut } from '../runtime/amr-artifact-upgrade';
 import { Icon } from './Icon';
 import styles from './AmrArtifactUpgradeHomeCard.module.css';
 
@@ -57,6 +58,13 @@ export function AmrArtifactUpgradeHomeCard({
     onDismiss();
   };
 
+  // Permanent counterpart of the close control: persists the opt-out shared
+  // with the upgrade dialog, then dismisses like a regular close.
+  const dismissForever = () => {
+    setAmrArtifactUpgradeOptedOut();
+    onDismiss();
+  };
+
   return (
     <section
       className={styles.card}
@@ -74,6 +82,14 @@ export function AmrArtifactUpgradeHomeCard({
         <p id={descriptionId} className={styles.message}>
           {t('chat.amrArtifactUpgrade.homeMessage')}
         </p>
+        <button
+          type="button"
+          className={styles.dontShowAgain}
+          onClick={dismissForever}
+          data-testid="amr-artifact-upgrade-home-dont-show-again"
+        >
+          {t('chat.amrArtifactUpgrade.dontShowAgain')}
+        </button>
       </div>
       <div className={styles.actions}>
         <Button

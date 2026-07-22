@@ -43,6 +43,7 @@ export const ja: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': '作品が完成しました。次のアイデアをさらに先へ。',
   'chat.amrArtifactUpgrade.homeMessage': 'より強力なモデル、並列タスク、毎月の追加クレジットを利用できます。',
   'chat.amrArtifactUpgrade.homeArtifactCta': '作品を見る',
+  'chat.amrArtifactUpgrade.dontShowAgain': '今後表示しない',
   'chat.antigravityError.launchTerminalCta': 'ターミナルでサインイン',
   'chat.antigravityError.launchSwitchModelCta': 'ターミナルでモデルを切り替え',
   'chat.connectionDropped': '応答が完了する前にモデルサービスへの接続が切断されました。多くはネットワークやプロキシの不安定が原因です。再試行してください。',

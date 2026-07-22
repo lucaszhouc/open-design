@@ -43,6 +43,7 @@ export const uk: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Робота готова. Розвиньте наступну ідею ще далі.',
   'chat.amrArtifactUpgrade.homeMessage': 'Оновіть тариф заради потужніших моделей, паралельних завдань і додаткових кредитів.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Переглянути роботу',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Більше не показувати',
   'chat.antigravityError.launchTerminalCta': 'Увійти через термінал',
   'chat.antigravityError.launchSwitchModelCta': 'Змінити модель у терміналі',
   'chat.connectionDropped': 'З’єднання зі службою моделі обірвалося до завершення відповіді — зазвичай через нестабільну мережу або проксі. Повторіть спробу.',

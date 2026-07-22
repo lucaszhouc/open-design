@@ -7,7 +7,11 @@ import {
   DAEMON_RUN_FINISHED_EVENT,
   type DaemonRunFinishedEventDetail,
 } from '../../src/providers/daemon';
-import { requestAmrArtifactUpgrade } from '../../src/runtime/amr-artifact-upgrade';
+import {
+  requestAmrArtifactUpgrade,
+  setAmrArtifactUpgradeCliIntroShown,
+  setAmrArtifactUpgradeOptedOut,
+} from '../../src/runtime/amr-artifact-upgrade';
 
 function publishFinishedRun(detail: Partial<DaemonRunFinishedEventDetail> = {}) {
   window.dispatchEvent(new CustomEvent<DaemonRunFinishedEventDetail>(
@@ -29,6 +33,7 @@ function requestSend(projectId = 'project-1', conversationId = 'conversation-1')
 }
 
 const BASE_PROPS = {
+  runtimeClass: 'cloud' as const,
   profile: 'prod',
   metricsConsent: false,
   installationId: null,
@@ -41,6 +46,7 @@ const BASE_PROPS = {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.clear();
   document.querySelectorAll('[data-external-modal-blocker]').forEach((node) => node.remove());
 });
 
@@ -242,5 +248,310 @@ describe('AmrArtifactUpgradeGate', () => {
 
     view.unmount();
     await expect(decision).resolves.toBe('cancel');
+  });
+
+  it('intercepts API-mode Sends exactly like the Cloud runtime', async () => {
+    render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="api"
+        plan="free"
+        planResolved
+      />,
+    );
+
+    act(() => publishFinishedRun());
+    const decision = requestSend();
+    await waitFor(() => expect(screen.getByTestId('amr-artifact-upgrade-dialog')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
+    await expect(decision).resolves.toBe('proceed');
+
+    // Same per-session dedup as Cloud: no second prompt for this session.
+    await expect(requestSend()).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+  });
+
+  it('shows a CLI-runtime user the send dialog exactly once ever', async () => {
+    const view = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        plan="free"
+        planResolved
+      />,
+    );
+
+    // The one-time introduction: full original pause semantics.
+    act(() => publishFinishedRun());
+    const decision = requestSend();
+    await waitFor(() => expect(screen.getByTestId('amr-artifact-upgrade-dialog')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
+    await expect(decision).resolves.toBe('proceed');
+
+    // Another eligible session in the same mount: retired, no pause.
+    act(() => publishFinishedRun({ runId: 'run-2', conversationId: 'conversation-2' }));
+    await expect(requestSend('project-1', 'conversation-2')).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+    view.unmount();
+
+    // Simulated restart: the persisted flag retires both surfaces.
+    const onHomeOfferChange = vi.fn();
+    const remounted = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeConversationId="conversation-3"
+        activeFileName="live:artifact-3"
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    act(() => publishFinishedRun({ runId: 'run-3', conversationId: 'conversation-3' }));
+    await expect(requestSend('project-1', 'conversation-3')).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+    remounted.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await act(async () => {});
+    expect(onHomeOfferChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+    );
+  });
+
+  it('uses the home card as the one-time CLI introduction when it fires first', async () => {
+    const onHomeOfferChange = vi.fn();
+    const view = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+
+    act(() => publishFinishedRun());
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await waitFor(() => expect(onHomeOfferChange).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: JSON.stringify(['project-1', 'conversation-1']) }),
+    ));
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+
+    // The card consumed the introduction: a later eligible send never pauses.
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeConversationId="conversation-2"
+        activeFileName="live:artifact-2"
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    act(() => publishFinishedRun({ runId: 'run-2', conversationId: 'conversation-2' }));
+    await expect(requestSend('project-1', 'conversation-2')).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+
+    // And no second card either, even after a simulated restart.
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await act(async () => {});
+    expect(onHomeOfferChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: JSON.stringify(['project-1', 'conversation-2']) }),
+    );
+    view.unmount();
+
+    const restartedOfferChange = vi.fn();
+    const remounted = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeConversationId="conversation-3"
+        activeFileName="live:artifact-3"
+        plan="free"
+        planResolved
+        onHomeOfferChange={restartedOfferChange}
+      />,
+    );
+    act(() => publishFinishedRun({ runId: 'run-3', conversationId: 'conversation-3' }));
+    remounted.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={restartedOfferChange}
+      />,
+    );
+    await act(async () => {});
+    expect(restartedOfferChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+    );
+  });
+
+  it('keeps Cloud prompts alive after the CLI introduction was consumed', async () => {
+    setAmrArtifactUpgradeCliIntroShown();
+    render(<AmrArtifactUpgradeGate {...BASE_PROPS} plan="free" planResolved />);
+
+    act(() => publishFinishedRun());
+    const decision = requestSend();
+    await waitFor(() => expect(screen.getByTestId('amr-artifact-upgrade-dialog')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
+    await expect(decision).resolves.toBe('proceed');
+  });
+
+  it('suppresses the CLI introduction for a previously persisted opt-out', async () => {
+    setAmrArtifactUpgradeOptedOut();
+    const onHomeOfferChange = vi.fn();
+    const view = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+
+    act(() => publishFinishedRun());
+    await expect(requestSend()).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        runtimeClass="cli"
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await act(async () => {});
+    expect(onHomeOfferChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+    );
+  });
+
+  it('never prompts again after the dialog opt-out, including on a fresh mount', async () => {
+    const view = render(<AmrArtifactUpgradeGate {...BASE_PROPS} plan="free" planResolved />);
+
+    act(() => publishFinishedRun());
+    const decision = requestSend();
+    await waitFor(() => expect(screen.getByTestId('amr-artifact-upgrade-dialog')).toBeTruthy());
+
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-optout'));
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
+    await expect(decision).resolves.toBe('proceed');
+
+    // Same mount: another eligible session no longer pauses its Send.
+    act(() => publishFinishedRun({ runId: 'run-2', conversationId: 'conversation-2' }));
+    await expect(requestSend('project-1', 'conversation-2')).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+
+    // Simulated app restart: a fresh Gate reads the persisted preference.
+    view.unmount();
+    const onHomeOfferChange = vi.fn();
+    const remounted = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    act(() => publishFinishedRun({ runId: 'run-3', conversationId: 'conversation-1' }));
+    await expect(requestSend()).resolves.toBe('proceed');
+    expect(screen.queryByTestId('amr-artifact-upgrade-dialog')).toBeNull();
+
+    remounted.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await act(async () => {});
+    expect(onHomeOfferChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+    );
+  });
+
+  it('suppresses the Home offer for a previously persisted opt-out', async () => {
+    setAmrArtifactUpgradeOptedOut();
+    const onHomeOfferChange = vi.fn();
+    const view = render(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+
+    act(() => publishFinishedRun());
+    view.rerender(
+      <AmrArtifactUpgradeGate
+        {...BASE_PROPS}
+        activeProjectId={null}
+        activeConversationId={null}
+        activeFileName={null}
+        homeVisible
+        plan="free"
+        planResolved
+        onHomeOfferChange={onHomeOfferChange}
+      />,
+    );
+    await act(async () => {});
+    expect(onHomeOfferChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: expect.any(String) }),
+    );
   });
 });

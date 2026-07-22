@@ -43,6 +43,7 @@ export const fa: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'اثر شما آماده است. ایدهٔ بعدی را فراتر ببرید.',
   'chat.amrArtifactUpgrade.homeMessage': 'برای مدل‌های قوی‌تر، وظایف هم‌زمان بیشتر و اعتبار ماهانهٔ بالاتر ارتقا دهید.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'مشاهدهٔ اثر',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'دیگر نشان نده',
   'chat.antigravityError.launchTerminalCta': 'ورود از طریق ترمینال',
   'chat.antigravityError.launchSwitchModelCta': 'تغییر مدل در ترمینال',
   'chat.connectionDropped': 'اتصال به سرویس مدل پیش از پایان پاسخ قطع شد — معمولاً به دلیل شبکه یا پراکسی ناپایدار. لطفاً دوباره تلاش کنید.',

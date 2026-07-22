@@ -3,11 +3,13 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AmrArtifactUpgradeDialog } from '../../src/components/AmrArtifactUpgradeDialog';
+import { isAmrArtifactUpgradeOptedOut } from '../../src/runtime/amr-artifact-upgrade';
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe('AmrArtifactUpgradeDialog', () => {
@@ -97,6 +99,45 @@ describe('AmrArtifactUpgradeDialog', () => {
     fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
     expect(onContinue).toHaveBeenCalledTimes(1);
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('persists "don\'t show this again" on any exit once checked', () => {
+    const onClose = vi.fn();
+    const onContinue = vi.fn();
+    render(
+      <AmrArtifactUpgradeDialog
+        profile="prod"
+        metricsConsent={false}
+        installationId={null}
+        onClose={onClose}
+        onContinue={onContinue}
+      />,
+    );
+
+    expect(isAmrArtifactUpgradeOptedOut()).toBe(false);
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-optout'));
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-later'));
+
+    expect(onContinue).toHaveBeenCalledTimes(1);
+    expect(isAmrArtifactUpgradeOptedOut()).toBe(true);
+  });
+
+  it('does not persist anything while the opt-out stays unchecked', () => {
+    const onClose = vi.fn();
+    render(
+      <AmrArtifactUpgradeDialog
+        profile="prod"
+        metricsConsent={false}
+        installationId={null}
+        onClose={onClose}
+        onContinue={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-close'));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(isAmrArtifactUpgradeOptedOut()).toBe(false);
   });
 
   it('treats the modal close control as cancel, not as Send', () => {

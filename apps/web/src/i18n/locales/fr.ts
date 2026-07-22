@@ -43,6 +43,7 @@ export const fr: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Votre création est prête. Allez plus loin avec la prochaine idée.',
   'chat.amrArtifactUpgrade.homeMessage': 'Passez à l’offre supérieure pour des modèles plus puissants, plus de tâches et plus de crédits.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Voir la création',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Ne plus afficher',
   'chat.antigravityError.launchTerminalCta': 'Se connecter via le terminal',
   'chat.antigravityError.launchSwitchModelCta': 'Changer de modèle dans le terminal',
   'chat.connectionDropped': 'La connexion au service de modèle a été interrompue avant la fin de la réponse — généralement un réseau ou un proxy instable. Veuillez réessayer.',

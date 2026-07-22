@@ -43,6 +43,7 @@ export const ru: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Работа готова. Сделайте следующую идею ещё сильнее.',
   'chat.amrArtifactUpgrade.homeMessage': 'Обновите тариф ради более мощных моделей, параллельных задач и дополнительных кредитов.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Посмотреть работу',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Больше не показывать',
   'chat.antigravityError.launchTerminalCta': 'Войти через терминал',
   'chat.antigravityError.launchSwitchModelCta': 'Сменить модель в терминале',
   'chat.connectionDropped': 'Соединение с сервисом модели прервалось до завершения ответа — обычно из-за нестабильной сети или прокси. Повторите попытку.',

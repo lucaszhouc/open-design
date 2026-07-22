@@ -1,6 +1,63 @@
 export const AMR_ARTIFACT_UPGRADE_REQUEST_EVENT =
   'open-design:amr-artifact-upgrade-request';
 
+const ARTIFACT_UPGRADE_OPTOUT_KEY = 'open-design:amr-artifact-upgrade-optout:v1';
+
+/** Whether the user permanently opted out of the artifact upgrade surfaces
+ * ("don't show this again"). Covers both the send-pausing dialog and the
+ * home offer card, across every project/conversation and app restarts.
+ * Same client-preference pattern as the low-balance warn opt-out. */
+export function isAmrArtifactUpgradeOptedOut(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(ARTIFACT_UPGRADE_OPTOUT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setAmrArtifactUpgradeOptedOut(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ARTIFACT_UPGRADE_OPTOUT_KEY, '1');
+  } catch {
+    // Persistence failure just means the upsell can show again next time.
+  }
+}
+
+/** Which kind of runtime the active conversation executes on, for upsell
+ * scoping. 'cloud' = the Open Design Cloud (AMR) daemon agent; 'cli' = any
+ * other local daemon agent, i.e. the user demonstrably runs their own CLI
+ * subscription; 'api' = BYOK API mode, whose keys can point at Open Design
+ * Cloud at any time and therefore follows the same rules as 'cloud'. */
+export type AmrUpsellRuntimeClass = 'cloud' | 'cli' | 'api';
+
+const ARTIFACT_UPGRADE_CLI_INTRO_SHOWN_KEY =
+  'open-design:amr-artifact-upgrade-cli-intro-shown:v1';
+
+/** Whether a user working on a local CLI runtime already got their one-time
+ * introduction to the upgrade offer. The first eligible surface (send-pause
+ * dialog or home card, whichever comes first) shows with full original
+ * semantics and sets this flag; both surfaces then stay retired for 'cli'
+ * contexts. 'cloud' and 'api' contexts never consult it. */
+export function isAmrArtifactUpgradeCliIntroShown(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(ARTIFACT_UPGRADE_CLI_INTRO_SHOWN_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setAmrArtifactUpgradeCliIntroShown(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ARTIFACT_UPGRADE_CLI_INTRO_SHOWN_KEY, '1');
+  } catch {
+    // Persistence failure just means the intro may show once more.
+  }
+}
+
 export type AmrArtifactUpgradeDecision = 'proceed' | 'cancel';
 
 export interface AmrArtifactUpgradeHomeOffer {

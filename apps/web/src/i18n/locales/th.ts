@@ -43,6 +43,7 @@ export const th: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'ผลงานพร้อมแล้ว พาไอเดียถัดไปให้ไปได้ไกลกว่าเดิม',
   'chat.amrArtifactUpgrade.homeMessage': 'อัปเกรดเพื่อใช้โมเดลที่ทรงพลังขึ้น งานขนานมากขึ้น และเครดิตรายเดือนมากขึ้น',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'ดูผลงาน',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'ไม่ต้องแสดงอีก',
   'chat.antigravityError.launchTerminalCta': 'ลงชื่อเข้าใช้ผ่านเทอร์มินัล',
   'chat.antigravityError.launchSwitchModelCta': 'สลับโมเดลในเทอร์มินัล',
   'chat.connectionDropped': 'การเชื่อมต่อกับบริการโมเดลหลุดก่อนที่การตอบกลับจะเสร็จสิ้น — มักเกิดจากเครือข่ายหรือพร็อกซีที่ไม่เสถียร โปรดลองอีกครั้ง',

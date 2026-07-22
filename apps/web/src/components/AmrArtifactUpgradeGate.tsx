@@ -6,9 +6,13 @@ import {
 import {
   AMR_ARTIFACT_UPGRADE_REQUEST_EVENT,
   amrArtifactUpgradeSessionKey,
+  isAmrArtifactUpgradeCliIntroShown,
+  isAmrArtifactUpgradeOptedOut,
+  setAmrArtifactUpgradeCliIntroShown,
   type AmrArtifactUpgradeDecision,
   type AmrArtifactUpgradeHomeOffer,
   type AmrArtifactUpgradeRequestDetail,
+  type AmrUpsellRuntimeClass,
 } from '../runtime/amr-artifact-upgrade';
 import { isFreeAmrPlan } from '../runtime/amr-low-balance-plan';
 import { AmrArtifactUpgradeDialog } from './AmrArtifactUpgradeDialog';
@@ -16,6 +20,13 @@ import { AmrArtifactUpgradeDialog } from './AmrArtifactUpgradeDialog';
 interface Props {
   plan: string | null;
   planResolved: boolean;
+  /** How the active conversation executes. 'cloud' (the AMR agent) and 'api'
+   * (BYOK keys, swappable to Open Design Cloud at any time) get the original
+   * per-session upsell semantics. 'cli' (any other local daemon agent — the
+   * user demonstrably runs their own subscription) gets exactly one full
+   * introduction ever: the first surface that would fire shows normally,
+   * then a persisted flag retires both surfaces for 'cli' contexts. */
+  runtimeClass: AmrUpsellRuntimeClass;
   profile: string | null;
   metricsConsent: boolean;
   installationId: string | null | undefined;
@@ -66,6 +77,7 @@ function homeOfferForRoute(
 export function AmrArtifactUpgradeGate({
   plan,
   planResolved,
+  runtimeClass,
   profile,
   metricsConsent,
   installationId,
@@ -126,12 +138,18 @@ export function AmrArtifactUpgradeGate({
       const sessionKey = detail
         ? amrArtifactUpgradeSessionKey(detail.projectId, detail.conversationId)
         : null;
+      // Opted-out users and CLI-runtime users who already had their one-time
+      // introduction pass through untouched: no preventDefault, no pause —
+      // the dispatch settles as 'proceed'. 'cloud' and 'api' contexts keep
+      // the original per-session interception.
       if (
         !sessionKey
         || detail.source !== 'chat_send'
         || !eligibleSessionsRef.current.has(sessionKey)
         || !planResolved
         || !isFreeAmrPlan(plan)
+        || (runtimeClass === 'cli' && isAmrArtifactUpgradeCliIntroShown())
+        || isAmrArtifactUpgradeOptedOut()
       ) {
         return;
       }
@@ -152,7 +170,7 @@ export function AmrArtifactUpgradeGate({
     };
     window.addEventListener(AMR_ARTIFACT_UPGRADE_REQUEST_EVENT, handleRequest);
     return () => window.removeEventListener(AMR_ARTIFACT_UPGRADE_REQUEST_EVENT, handleRequest);
-  }, [plan, planResolved]);
+  }, [plan, planResolved, runtimeClass]);
 
   useEffect(() => {
     const pending = pendingSendRef.current;
@@ -160,7 +178,14 @@ export function AmrArtifactUpgradeGate({
 
     // Billing status can be unavailable while the Vela account remains
     // logged in. An unknown plan must never leave an intercepted Send hanging.
-    if (!planResolved || !isFreeAmrPlan(plan)) {
+    // The runtime/preference re-checks cover a selection or preference change
+    // racing the pause — a Send the gate no longer cares about continues.
+    if (
+      !planResolved
+      || !isFreeAmrPlan(plan)
+      || (runtimeClass === 'cli' && isAmrArtifactUpgradeCliIntroShown())
+      || isAmrArtifactUpgradeOptedOut()
+    ) {
       pendingSendRef.current = null;
       pending.settle('proceed');
       return;
@@ -175,10 +200,14 @@ export function AmrArtifactUpgradeGate({
       return;
     }
 
+    // The dialog is really opening now — for a CLI-runtime user this IS the
+    // one-time introduction, so burn the flag here and not any earlier: a
+    // pass-through, a modal collision, or a plan flip must not consume it.
+    if (runtimeClass === 'cli') setAmrArtifactUpgradeCliIntroShown();
     promptedSessionsRef.current.add(pending.sessionKey);
     openRef.current = true;
     setDialogSessionKey(pending.sessionKey);
-  }, [pendingRevision, plan, planResolved]);
+  }, [pendingRevision, plan, planResolved, runtimeClass]);
 
   useEffect(() => {
     const previous = previousSurfaceRef.current;
@@ -203,13 +232,27 @@ export function AmrArtifactUpgradeGate({
 
   useEffect(() => {
     if (!pendingHomeOffer || !planResolved) return;
-    if (isFreeAmrPlan(plan) && !hasOpenModal()) {
+    // 'cloud' and 'api' contexts keep the normal per-session dedup. A 'cli'
+    // context may use the card as its one-time introduction if the dialog
+    // has not already been it — and only when a display surface is actually
+    // wired up, so the mock review path can never burn the flag. The opt-out
+    // silences every variant.
+    const cliIntroAvailable =
+      runtimeClass !== 'cli'
+      || (onHomeOfferChange != null && !isAmrArtifactUpgradeCliIntroShown());
+    if (
+      isFreeAmrPlan(plan)
+      && cliIntroAvailable
+      && !isAmrArtifactUpgradeOptedOut()
+      && !hasOpenModal()
+    ) {
+      if (runtimeClass === 'cli') setAmrArtifactUpgradeCliIntroShown();
       homeOfferedSessionsRef.current.add(pendingHomeOffer.sessionKey);
       promptedSessionsRef.current.add(pendingHomeOffer.sessionKey);
       onHomeOfferChange?.(pendingHomeOffer);
     }
     setPendingHomeOffer(null);
-  }, [onHomeOfferChange, pendingHomeOffer, plan, planResolved]);
+  }, [onHomeOfferChange, pendingHomeOffer, plan, planResolved, runtimeClass]);
 
   useEffect(() => {
     if (!planResolved || isFreeAmrPlan(plan)) return;

@@ -43,6 +43,7 @@ export const id: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Karya Anda siap. Bawa ide berikutnya lebih jauh.',
   'chat.amrArtifactUpgrade.homeMessage': 'Tingkatkan untuk model yang lebih kuat, lebih banyak tugas paralel, dan lebih banyak kredit.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Lihat karya',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Jangan tampilkan lagi',
   'chat.antigravityError.launchTerminalCta': 'Masuk melalui terminal',
   'chat.antigravityError.launchSwitchModelCta': 'Ganti model di terminal',
   'chat.connectionDropped': 'Koneksi ke layanan model terputus sebelum respons selesai — biasanya karena jaringan atau proxy yang tidak stabil. Silakan coba lagi.',

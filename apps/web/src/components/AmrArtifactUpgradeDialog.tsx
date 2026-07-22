@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, Dialog, VisuallyHidden } from '@open-design/components';
 import { useT } from '../i18n';
@@ -10,6 +10,7 @@ import {
   recordAmrEntry,
 } from '../analytics/amr-attribution';
 import { amrPlansUrlForProfile } from '../runtime/amr-guidance';
+import { setAmrArtifactUpgradeOptedOut } from '../runtime/amr-artifact-upgrade';
 import { Icon, type IconName } from './Icon';
 import styles from './AmrArtifactUpgradeDialog.module.css';
 
@@ -75,7 +76,22 @@ export function AmrArtifactUpgradeDialog({
   const dialogId = useId();
   const titleId = useId();
   const descriptionId = useId();
+  const optOutRef = useRef<HTMLInputElement>(null);
   const [offerCountdown, setOfferCountdown] = useState<OfferCountdown | null>(null);
+
+  // Committed on every exit path (plans, continue, close, Escape) so a checked
+  // box always sticks, mirroring the low-balance warn opt-out.
+  const commitOptOut = () => {
+    if (optOutRef.current?.checked) setAmrArtifactUpgradeOptedOut();
+  };
+  const closeDialog = () => {
+    commitOptOut();
+    onClose();
+  };
+  const continueSend = () => {
+    commitOptOut();
+    onContinue();
+  };
 
   useEffect(() => {
     const updateCountdown = () => setOfferCountdown(recurringOfferCountdown(Date.now()));
@@ -159,7 +175,7 @@ export function AmrArtifactUpgradeDialog({
       '_blank',
       'noopener,noreferrer',
     );
-    onClose();
+    closeDialog();
   };
 
   const offerDays = offerCountdown
@@ -176,7 +192,7 @@ export function AmrArtifactUpgradeDialog({
       role="dialog"
       ariaLabelledBy={titleId}
       ariaDescribedBy={descriptionId}
-      onClose={onClose}
+      onClose={closeDialog}
       closeOnEscape
       className={styles.panel}
       backdropClassName={styles.backdrop}
@@ -187,7 +203,7 @@ export function AmrArtifactUpgradeDialog({
         size="icon"
         className={styles.closeButton}
         aria-label={t('common.close')}
-        onClick={onClose}
+        onClick={closeDialog}
         data-testid="amr-artifact-upgrade-close"
       >
         <Icon name="close" size={17} strokeWidth={1.8} />
@@ -240,6 +256,17 @@ export function AmrArtifactUpgradeDialog({
             </li>
           ))}
         </ul>
+        {/* Canonical suppression-dialog placement (macOS alerts, VS Code,
+            JetBrains): the "don't show again" checkbox sits as a quiet meta
+            option ahead of the action stack. */}
+        <label className={styles.optOut}>
+          <input
+            ref={optOutRef}
+            type="checkbox"
+            data-testid="amr-artifact-upgrade-optout"
+          />
+          {t('chat.amrArtifactUpgrade.dontShowAgain')}
+        </label>
         <div className={styles.actions}>
           <Button
             variant="primary"
@@ -255,7 +282,7 @@ export function AmrArtifactUpgradeDialog({
           <Button
             variant="ghost"
             className={styles.later}
-            onClick={onContinue}
+            onClick={continueSend}
             data-testid="amr-artifact-upgrade-later"
           >
             {t('chat.amrArtifactUpgrade.laterCta')}

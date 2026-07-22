@@ -43,6 +43,7 @@ export const de: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Dein Ergebnis ist fertig. Mach die nächste Idee noch stärker.',
   'chat.amrArtifactUpgrade.homeMessage': 'Upgrade für stärkere Modelle, mehr parallele Aufgaben und mehr Monatsguthaben.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Werk ansehen',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Nicht mehr anzeigen',
   'chat.antigravityError.launchTerminalCta': 'Über Terminal anmelden',
   'chat.antigravityError.launchSwitchModelCta': 'Modell im Terminal wechseln',
   'chat.connectionDropped': 'Die Verbindung zum Modelldienst wurde vor dem Ende der Antwort unterbrochen – meist ein instabiles Netzwerk oder ein Proxy. Bitte erneut versuchen.',

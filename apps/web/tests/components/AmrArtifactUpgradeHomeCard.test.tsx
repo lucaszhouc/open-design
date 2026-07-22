@@ -3,10 +3,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AmrArtifactUpgradeHomeCard } from '../../src/components/AmrArtifactUpgradeHomeCard';
+import { isAmrArtifactUpgradeOptedOut } from '../../src/runtime/amr-artifact-upgrade';
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  window.localStorage.clear();
 });
 
 describe('AmrArtifactUpgradeHomeCard', () => {
@@ -72,5 +74,26 @@ describe('AmrArtifactUpgradeHomeCard', () => {
 
     expect(screen.getByTestId('amr-artifact-upgrade-home-card')).toBeTruthy();
     expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('persists only the explicit permanent dismiss, not the regular close', () => {
+    const onDismiss = vi.fn();
+    render(
+      <AmrArtifactUpgradeHomeCard
+        profile="prod"
+        metricsConsent={false}
+        installationId={null}
+        onDismiss={onDismiss}
+        onViewArtifact={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(isAmrArtifactUpgradeOptedOut()).toBe(false);
+
+    fireEvent.click(screen.getByTestId('amr-artifact-upgrade-home-dont-show-again'));
+    expect(onDismiss).toHaveBeenCalledTimes(2);
+    expect(isAmrArtifactUpgradeOptedOut()).toBe(true);
   });
 });

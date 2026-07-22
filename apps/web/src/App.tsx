@@ -2638,6 +2638,17 @@ function AppInner() {
           amrLoginStatus !== null
           && (amrLoginStatus.loggedIn === false || resolvedAmrPlan !== null)
         }
+        // Same runtime signal the pre-run balance gate keys on for the cloud
+        // leg: sends execute on Open Design Cloud only when the selected
+        // daemon agent is AMR. Other daemon agents are the user's own local
+        // CLIs; non-daemon mode is BYOK API keys (swappable to Cloud).
+        runtimeClass={
+          config.mode === 'daemon'
+            ? config.agentId === AMR_AGENT_ID
+              ? 'cloud'
+              : 'cli'
+            : 'api'
+        }
         profile={amrLoginStatus?.profile ?? null}
         metricsConsent={config.telemetry?.metrics === true}
         installationId={config.installationId}

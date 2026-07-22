@@ -200,12 +200,42 @@
   background: var(--accent-tint);
 }
 
+/* Sits between the benefits and the action stack; the auto top margin (moved
+ * off .actions) keeps the checkbox visually attached to the actions when the
+ * content column is shorter than the visual column. Scoped under .content so
+ * it out-weighs the generic `.modal label` column layout. */
+.content .optOut {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: flex-start;
+  gap: 7px;
+  margin: auto 0 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.content .optOut input {
+  /* Undo the global text-input chrome (width:100%, padding, border) that
+   * primitives.css puts on every `input` — this is a native checkbox. */
+  appearance: auto;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--accent);
+  margin: 0;
+}
+
 .actions {
   display: flex;
   flex-direction: column;
   gap: 7px;
   width: 100%;
-  margin-top: auto;
 }
 
 .panel .cta {

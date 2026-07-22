@@ -43,6 +43,7 @@ export const ar: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'عملك جاهز. ارتقِ بفكرتك التالية.',
   'chat.amrArtifactUpgrade.homeMessage': 'احصل على نماذج أقوى ومهام متوازية أكثر ورصيد شهري أكبر.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'عرض العمل',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'لا تعرض هذا مجددًا',
   'chat.antigravityError.launchTerminalCta': 'تسجيل الدخول عبر الطرفية',
   'chat.antigravityError.launchSwitchModelCta': 'تبديل النموذج في الطرفية',
   'chat.connectionDropped': 'انقطع الاتصال بخدمة النموذج قبل اكتمال الاستجابة — عادةً بسبب شبكة أو وكيل (proxy) غير مستقر. يرجى إعادة المحاولة.',

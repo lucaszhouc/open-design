@@ -43,6 +43,7 @@ export const pl: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Projekt jest gotowy. Rozwiń kolejny pomysł jeszcze bardziej.',
   'chat.amrArtifactUpgrade.homeMessage': 'Ulepsz plan, aby zyskać mocniejsze modele, więcej zadań i więcej kredytów.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Zobacz projekt',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Nie pokazuj ponownie',
   'chat.antigravityError.launchTerminalCta': 'Zaloguj się przez terminal',
   'chat.antigravityError.launchSwitchModelCta': 'Zmień model w terminalu',
   'chat.connectionDropped': 'Połączenie z usługą modelu zostało przerwane przed zakończeniem odpowiedzi — zwykle z powodu niestabilnej sieci lub serwera proxy. Spróbuj ponownie.',

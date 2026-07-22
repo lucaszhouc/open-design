@@ -43,6 +43,7 @@ export const tr: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Çalışmanız hazır. Sonraki fikri daha ileri taşıyın.',
   'chat.amrArtifactUpgrade.homeMessage': 'Daha güçlü modeller, daha fazla paralel görev ve daha çok aylık kredi için yükseltin.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Çalışmayı gör',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Bir daha gösterme',
   'chat.antigravityError.launchTerminalCta': 'Terminal üzerinden giriş yap',
   'chat.antigravityError.launchSwitchModelCta': 'Terminalde modeli değiştir',
   'chat.connectionDropped': 'Yanıt tamamlanmadan model hizmetiyle bağlantı koptu — genellikle kararsız bir ağ veya proxy nedeniyle. Lütfen yeniden deneyin.',

@@ -43,6 +43,7 @@ export const hu: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Elkészült az alkotásod. Vidd tovább a következő ötletet.',
   'chat.amrArtifactUpgrade.homeMessage': 'Válts erősebb modellekre, több párhuzamos feladatra és több havi kreditre.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'Alkotás megnyitása',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Ne mutassa többé',
   'chat.antigravityError.launchTerminalCta': 'Bejelentkezés terminálon keresztül',
   'chat.antigravityError.launchSwitchModelCta': 'Modellváltás a terminálban',
   'chat.connectionDropped': 'A modellszolgáltatáshoz való kapcsolat megszakadt a válasz befejezése előtt – általában instabil hálózat vagy proxy miatt. Kérjük, próbáld újra.',

@@ -2519,6 +2519,7 @@ export interface Dict {
   'chat.amrArtifactUpgrade.homeTitle': string;
   'chat.amrArtifactUpgrade.homeMessage': string;
   'chat.amrArtifactUpgrade.homeArtifactCta': string;
+  'chat.amrArtifactUpgrade.dontShowAgain': string;
   'chat.antigravityError.launchTerminalCta': string;
   'chat.antigravityError.launchSwitchModelCta': string;
   'chat.connectionDropped': string;

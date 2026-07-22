@@ -43,6 +43,7 @@ export const en: Dict = {
   'chat.amrArtifactUpgrade.homeTitle': 'Your artifact is ready. Take the next idea further.',
   'chat.amrArtifactUpgrade.homeMessage': 'Upgrade for stronger models, more parallel tasks, and more monthly credits.',
   'chat.amrArtifactUpgrade.homeArtifactCta': 'View work',
+  'chat.amrArtifactUpgrade.dontShowAgain': 'Don\'t show this again',
   'chat.antigravityError.launchTerminalCta': 'Sign in via terminal',
   'chat.antigravityError.launchSwitchModelCta': 'Switch model in terminal',
   'chat.connectionDropped': 'The connection to the model service dropped before the response finished — usually an unstable network or proxy. Please retry.',
