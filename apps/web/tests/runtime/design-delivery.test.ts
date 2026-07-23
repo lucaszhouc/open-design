@@ -184,6 +184,91 @@ describe('resolveDesignDeliveryOutcome', () => {
     ).toBe('awaiting_input');
   });
 
+  it('classifies a zero-delivery mutating run with provably external writes as external-only', () => {
+    expect(
+      resolveDesignDeliveryOutcome({
+        sessionMode: 'design',
+        runStatus: 'succeeded',
+        content: 'I saved the report to your desktop.',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'w-1',
+            name: 'Write',
+            input: { file_path: 'C:/Users/alice/Desktop/report.html' },
+          },
+        ],
+        producedFileCount: 0,
+        traceObjectFileCount: 0,
+        externalMutationCount: 1,
+      }),
+    ).toBe('external_only');
+  });
+
+  it('keeps the plain no_result outcome when no external mutation was proven', () => {
+    expect(
+      resolveDesignDeliveryOutcome({
+        sessionMode: 'design',
+        runStatus: 'succeeded',
+        content: 'I saved the report to your desktop.',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'w-1',
+            name: 'Write',
+            input: { file_path: 'C:/Users/alice/Desktop/report.html' },
+          },
+        ],
+        producedFileCount: 0,
+        traceObjectFileCount: 0,
+        externalMutationCount: 0,
+      }),
+    ).toBe('no_result');
+  });
+
+  it('prefers in-project delivery evidence over external writes', () => {
+    expect(
+      resolveDesignDeliveryOutcome({
+        sessionMode: 'design',
+        runStatus: 'succeeded',
+        content: '',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'w-1',
+            name: 'Write',
+            input: { file_path: 'C:/Users/alice/Desktop/report.html' },
+          },
+        ],
+        producedFileCount: 1,
+        traceObjectFileCount: 0,
+        externalMutationCount: 1,
+      }),
+    ).toBe('delivered');
+  });
+
+  it('keeps a failed artifact save a delivery failure even with external writes', () => {
+    expect(
+      resolveDesignDeliveryOutcome({
+        sessionMode: 'design',
+        runStatus: 'succeeded',
+        content: '',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'w-1',
+            name: 'Write',
+            input: { file_path: 'C:/Users/alice/Desktop/report.html' },
+          },
+        ],
+        producedFileCount: 0,
+        traceObjectFileCount: 0,
+        persistenceFailed: true,
+        externalMutationCount: 1,
+      }),
+    ).toBe('delivery_failed');
+  });
+
   it('does not impose artifact delivery on Chat/Plan or already-failed runs', () => {
     for (const sessionMode of ['chat', 'plan'] as const) {
       expect(

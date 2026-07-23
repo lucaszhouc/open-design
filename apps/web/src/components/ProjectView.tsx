@@ -116,6 +116,7 @@ import {
   resolveDesignDeliveryOutcome,
   type DesignDeliveryOutcome,
 } from '../runtime/design-delivery';
+import { deriveFileOps } from '../runtime/file-ops';
 import { RESUME_CONTINUE_PROMPT } from '../runtime/resume';
 import { checkAmrBalanceGate } from '../runtime/amr-balance-gate';
 import { isPaidAmrPlan, resolveAmrPlan } from '../runtime/amr-low-balance-plan';
@@ -3806,6 +3807,7 @@ export function ProjectView({
               traceObjectFileCount: traceObjectFiles.length,
               persistenceSucceeded: artifactPersistenceSucceeded,
               persistenceFailed: artifactPersistenceError !== undefined,
+              externalMutationCount: countExternalMutationPaths(message.events, project.id, projectDetail.resolvedDir),
             });
             updateMessageById(
               message.id,
@@ -3823,8 +3825,8 @@ export function ProjectView({
               true,
               { telemetryFinalized: true },
             );
-            if (deliveryOutcome === 'no_result' || deliveryOutcome === 'delivery_failed') {
-              setError(artifactPersistenceError ?? DESIGN_RESULT_MISSING_DETAIL);
+            if (deliveryOutcome === 'no_result' || deliveryOutcome === 'delivery_failed' || deliveryOutcome === 'external_only') {
+              setError(designDeliveryFailureDetail(deliveryOutcome, artifactPersistenceError));
             }
             await auditDesignSystemWorkspaceAfterRun(message.id);
             // Clear stale retry count for successfully recovered run.
@@ -4132,6 +4134,7 @@ export function ProjectView({
                   traceObjectFileCount: traceObjectFiles.length,
                   persistenceSucceeded: artifactPersistenceSucceeded,
                   persistenceFailed: artifactPersistenceError !== undefined,
+                  externalMutationCount: countExternalMutationPaths(deliveryEvents, project.id, projectDetail.resolvedDir),
                 });
                 updateMessageById(
                   message.id,
@@ -4150,8 +4153,8 @@ export function ProjectView({
                   true,
                   { telemetryFinalized: true },
                 );
-                if (deliveryOutcome === 'no_result' || deliveryOutcome === 'delivery_failed') {
-                  setError(artifactPersistenceError ?? DESIGN_RESULT_MISSING_DETAIL);
+                if (deliveryOutcome === 'no_result' || deliveryOutcome === 'delivery_failed' || deliveryOutcome === 'external_only') {
+                  setError(designDeliveryFailureDetail(deliveryOutcome, artifactPersistenceError));
                 }
                 await auditDesignSystemWorkspaceAfterRun(message.id);
               })();
@@ -5591,6 +5594,7 @@ export function ProjectView({
                 traceObjectFileCount: traceObjectFiles.length,
                 persistenceSucceeded: artifactPersistenceSucceeded,
                 persistenceFailed: artifactPersistenceError !== undefined,
+                externalMutationCount: countExternalMutationPaths(deliveryCandidate.events, project.id, projectDetail.resolvedDir),
               });
               const finalized = applyDesignDeliveryOutcome(
                 deliveryCandidate,
@@ -5607,8 +5611,8 @@ export function ProjectView({
                 persistMessage(finalized, { telemetryFinalized: true });
                 return updated;
               });
-              if (deliveryOutcome === 'no_result' || deliveryOutcome === 'delivery_failed') {
-                setError(artifactPersistenceError ?? DESIGN_RESULT_MISSING_DETAIL);
+              if (deliveryOutcome === 'no_result' || deliveryOutcome === 'delivery_failed' || deliveryOutcome === 'external_only') {
+                setError(designDeliveryFailureDetail(deliveryOutcome, artifactPersistenceError));
                 if (runCommentAttachments.length > 0) {
                   void patchAttachedStatuses(runCommentAttachments, 'failed');
                 }
@@ -9581,8 +9585,19 @@ const DESIGN_RESULT_MISSING_DETAIL =
   'The design run finished without producing a deliverable project file.';
 const DESIGN_RESULT_DELIVERY_FAILED_DETAIL =
   'The design result was generated, but Open Design could not save it to the project.';
+const DESIGN_RESULT_EXTERNAL_ONLY_DETAIL =
+  'The run wrote files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.';
 
-function applyDesignDeliveryOutcome(
+export function designDeliveryFailureDetail(
+  outcome: DesignDeliveryOutcome,
+  persistenceError?: string,
+): string {
+  if (outcome === 'delivery_failed') return persistenceError || DESIGN_RESULT_DELIVERY_FAILED_DETAIL;
+  if (outcome === 'external_only') return DESIGN_RESULT_EXTERNAL_ONLY_DETAIL;
+  return DESIGN_RESULT_MISSING_DETAIL;
+}
+
+export function applyDesignDeliveryOutcome(
   message: ChatMessage,
   outcome: DesignDeliveryOutcome,
   persistenceError?: string,
@@ -9590,14 +9605,11 @@ function applyDesignDeliveryOutcome(
   if (outcome === 'delivered') {
     return { ...message, resultDeliveryState: 'delivered' };
   }
-  if (outcome !== 'no_result' && outcome !== 'delivery_failed') return message;
-  const detail =
-    outcome === 'delivery_failed'
-      ? persistenceError || DESIGN_RESULT_DELIVERY_FAILED_DETAIL
-      : DESIGN_RESULT_MISSING_DETAIL;
+  if (outcome !== 'no_result' && outcome !== 'delivery_failed' && outcome !== 'external_only') return message;
+  const detail = designDeliveryFailureDetail(outcome, persistenceError);
   const failed = {
     ...message,
-    resultDeliveryState: outcome,
+    resultDeliveryState: outcome === 'external_only' ? 'no_result' : outcome,
     resumable: false,
   };
   return appendErrorStatusEvent(
@@ -9777,6 +9789,44 @@ export function resolveAgentTouchedFileNames(
     if (file) names.add(file.name);
   }
   return names;
+}
+
+// Count mutated tool paths that provably resolve outside the project root.
+// Conservative: relative paths, managed-project aliases, `..` escapes that
+// cannot be lexically resolved, and runs without a usable root all count as
+// in-project (0), so the plain no_result path keeps handling them.
+export function countExternalMutationPaths(
+  events: AgentEvent[] | undefined,
+  projectId?: string,
+  projectRoot?: string | null,
+): number {
+  let count = 0;
+  for (const entry of deriveFileOps(events)) {
+    if (!entry.ops.some((op) => op === 'write' || op === 'edit' || op === 'delete')) continue;
+    if (isProvablyOutsideProject(entry.fullPath, projectId, projectRoot)) count += 1;
+  }
+  return count;
+}
+
+function isProvablyOutsideProject(
+  rawPath: string,
+  projectId?: string,
+  projectRoot?: string | null,
+): boolean {
+  const slashed = rawPath.replace(/\\/g, '/');
+  if (!isAbsoluteToolPath(slashed)) return false;
+  const segments = lexicallyNormalizePathSegments(slashed);
+  if (!segments || segments.length === 0) return false;
+  if (relativePathFromManagedProjectAlias(segments.join('/'), projectId)) return false;
+  const rootSegments = projectRoot
+    ? lexicallyNormalizePathSegments(projectRoot.replace(/\\/g, '/'))
+    : null;
+  if (!rootSegments || rootSegments.length === 0) return false;
+  if (segments.length <= rootSegments.length) return true;
+  for (let i = 0; i < rootSegments.length; i += 1) {
+    if (segments[i] !== rootSegments[i]) return true;
+  }
+  return false;
 }
 
 // Reattach with a recovered (on-disk) artifact must still include any
