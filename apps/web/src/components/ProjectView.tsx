@@ -3807,7 +3807,7 @@ export function ProjectView({
               traceObjectFileCount: traceObjectFiles.length,
               persistenceSucceeded: artifactPersistenceSucceeded,
               persistenceFailed: artifactPersistenceError !== undefined,
-              externalMutationCount: countExternalMutationPaths(message.events, project.id, projectDetail.resolvedDir),
+              ...summarizeMutationPaths(message.events, project.id, projectDetail.resolvedDir),
             });
             updateMessageById(
               message.id,
@@ -4134,7 +4134,7 @@ export function ProjectView({
                   traceObjectFileCount: traceObjectFiles.length,
                   persistenceSucceeded: artifactPersistenceSucceeded,
                   persistenceFailed: artifactPersistenceError !== undefined,
-                  externalMutationCount: countExternalMutationPaths(deliveryEvents, project.id, projectDetail.resolvedDir),
+                  ...summarizeMutationPaths(deliveryEvents, project.id, projectDetail.resolvedDir),
                 });
                 updateMessageById(
                   message.id,
@@ -5594,7 +5594,7 @@ export function ProjectView({
                 traceObjectFileCount: traceObjectFiles.length,
                 persistenceSucceeded: artifactPersistenceSucceeded,
                 persistenceFailed: artifactPersistenceError !== undefined,
-                externalMutationCount: countExternalMutationPaths(deliveryCandidate.events, project.id, projectDetail.resolvedDir),
+                ...summarizeMutationPaths(deliveryCandidate.events, project.id, projectDetail.resolvedDir),
               });
               const finalized = applyDesignDeliveryOutcome(
                 deliveryCandidate,
@@ -9791,21 +9791,43 @@ export function resolveAgentTouchedFileNames(
   return names;
 }
 
-// Count mutated tool paths that provably resolve outside the project root.
-// Conservative: relative paths, managed-project aliases, `..` escapes that
-// cannot be lexically resolved, and runs without a usable root all count as
-// in-project (0), so the plain no_result path keeps handling them.
-export function countExternalMutationPaths(
+export interface MutationPathSummary {
+  /** Mutated tool paths whose every call completed successfully. */
+  mutationPathCount: number;
+  /** Subset of mutationPathCount provably outside the project root. */
+  externalMutationPathCount: number;
+}
+
+// Summarize successfully mutated tool paths and how many provably resolve
+// outside the project root. Errored or unresolved mutation entries are
+// excluded entirely — a rejected write is not evidence that files were
+// written anywhere. The containment check is conservative: relative paths,
+// managed-project aliases, `..` escapes that cannot be lexically resolved,
+// and runs without a usable root all count as in-project, so the plain
+// no_result path keeps handling them.
+export function summarizeMutationPaths(
   events: AgentEvent[] | undefined,
   projectId?: string,
   projectRoot?: string | null,
-): number {
-  let count = 0;
+): MutationPathSummary {
+  let mutationPathCount = 0;
+  let externalMutationPathCount = 0;
   for (const entry of deriveFileOps(events)) {
     if (!entry.ops.some((op) => op === 'write' || op === 'edit' || op === 'delete')) continue;
-    if (isProvablyOutsideProject(entry.fullPath, projectId, projectRoot)) count += 1;
+    if (entry.status !== 'done') continue;
+    mutationPathCount += 1;
+    if (isProvablyOutsideProject(entry.fullPath, projectId, projectRoot)) {
+      externalMutationPathCount += 1;
+    }
   }
-  return count;
+  return { mutationPathCount, externalMutationPathCount };
+}
+
+// Windows absolute paths are case-insensitive; POSIX paths are not. Fold case
+// only when BOTH sides are drive-letter paths so `c:/work/site` matches root
+// `C:/Work/Site` while `/srv/Site` keeps POSIX case sensitivity.
+function isWindowsDrivePath(slashedPath: string): boolean {
+  return /^[A-Za-z]:\//.test(slashedPath);
 }
 
 function isProvablyOutsideProject(
@@ -9818,13 +9840,15 @@ function isProvablyOutsideProject(
   const segments = lexicallyNormalizePathSegments(slashed);
   if (!segments || segments.length === 0) return false;
   if (relativePathFromManagedProjectAlias(segments.join('/'), projectId)) return false;
-  const rootSegments = projectRoot
-    ? lexicallyNormalizePathSegments(projectRoot.replace(/\\/g, '/'))
-    : null;
-  if (!rootSegments || rootSegments.length === 0) return false;
+  const slashedRoot = projectRoot ? projectRoot.replace(/\\/g, '/') : null;
+  const rootSegments = slashedRoot ? lexicallyNormalizePathSegments(slashedRoot) : null;
+  if (!slashedRoot || !rootSegments || rootSegments.length === 0) return false;
   if (segments.length <= rootSegments.length) return true;
+  const foldCase = isWindowsDrivePath(slashed) && isWindowsDrivePath(slashedRoot);
   for (let i = 0; i < rootSegments.length; i += 1) {
-    if (segments[i] !== rootSegments[i]) return true;
+    const left = foldCase ? segments[i]!.toLowerCase() : segments[i];
+    const right = foldCase ? rootSegments[i]!.toLowerCase() : rootSegments[i];
+    if (left !== right) return true;
   }
   return false;
 }

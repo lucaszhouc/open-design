@@ -200,7 +200,8 @@ describe('resolveDesignDeliveryOutcome', () => {
         ],
         producedFileCount: 0,
         traceObjectFileCount: 0,
-        externalMutationCount: 1,
+        mutationPathCount: 1,
+        externalMutationPathCount: 1,
       }),
     ).toBe('external_only');
   });
@@ -221,7 +222,39 @@ describe('resolveDesignDeliveryOutcome', () => {
         ],
         producedFileCount: 0,
         traceObjectFileCount: 0,
-        externalMutationCount: 0,
+        mutationPathCount: 1,
+        externalMutationPathCount: 0,
+      }),
+    ).toBe('no_result');
+  });
+
+  it('keeps no_result for mixed internal/external mutations', () => {
+    // One in-project delete plus one external write: neither produced nor
+    // trace-object files exist, but not EVERY mutation was external, so the
+    // "wrote files only outside the project" wording would be wrong.
+    expect(
+      resolveDesignDeliveryOutcome({
+        sessionMode: 'design',
+        runStatus: 'succeeded',
+        content: 'Cleaned up the stale page and saved the report to your desktop.',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'b-1',
+            name: 'Bash',
+            input: { command: 'rm stale.html' },
+          },
+          {
+            kind: 'tool_use',
+            id: 'w-1',
+            name: 'Write',
+            input: { file_path: 'C:/Users/alice/Desktop/report.html' },
+          },
+        ],
+        producedFileCount: 0,
+        traceObjectFileCount: 0,
+        mutationPathCount: 2,
+        externalMutationPathCount: 1,
       }),
     ).toBe('no_result');
   });
@@ -242,7 +275,8 @@ describe('resolveDesignDeliveryOutcome', () => {
         ],
         producedFileCount: 1,
         traceObjectFileCount: 0,
-        externalMutationCount: 1,
+        mutationPathCount: 1,
+        externalMutationPathCount: 1,
       }),
     ).toBe('delivered');
   });
@@ -264,7 +298,8 @@ describe('resolveDesignDeliveryOutcome', () => {
         producedFileCount: 0,
         traceObjectFileCount: 0,
         persistenceFailed: true,
-        externalMutationCount: 1,
+        mutationPathCount: 1,
+        externalMutationPathCount: 1,
       }),
     ).toBe('delivery_failed');
   });

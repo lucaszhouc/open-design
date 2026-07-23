@@ -21,8 +21,10 @@ export interface DesignDeliveryInput {
   traceObjectFileCount: number;
   persistenceSucceeded?: boolean;
   persistenceFailed?: boolean;
-  /** Mutated tool paths provably outside the project root (see countExternalMutationPaths). */
-  externalMutationCount?: number;
+  /** Successfully mutated tool paths this turn (see summarizeMutationPaths). */
+  mutationPathCount?: number;
+  /** Subset of mutationPathCount provably outside the project root. */
+  externalMutationPathCount?: number;
 }
 
 /**
@@ -74,9 +76,10 @@ function hasLiveArtifactDelivery(events: AgentEvent[] | undefined): boolean {
  * claims completion without ever calling a write tool now passes as text; the
  * text itself makes that visible to the user.
  *
- * When every mutation provably landed outside the project root, the outcome
- * is external_only so the UI can say where the files went instead of
- * claiming nothing was produced; it persists as no_result.
+ * When every successful mutation provably landed outside the project root
+ * (mixed in/out turns and turns whose only mutations errored do not qualify),
+ * the outcome is external_only so the UI can say where the files went instead
+ * of claiming nothing was produced; it persists as no_result.
  */
 export function resolveDesignDeliveryOutcome(
   input: DesignDeliveryInput,
@@ -99,7 +102,9 @@ export function resolveDesignDeliveryOutcome(
   if (!hasFileMutationToolUse(input.events) && input.content.trim().length > 0) {
     return 'report_only';
   }
-  if ((input.externalMutationCount ?? 0) > 0) return 'external_only';
+  const mutations = input.mutationPathCount ?? 0;
+  const external = input.externalMutationPathCount ?? 0;
+  if (mutations > 0 && external === mutations) return 'external_only';
   return 'no_result';
 }
 

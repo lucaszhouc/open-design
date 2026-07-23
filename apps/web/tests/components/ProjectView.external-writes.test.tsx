@@ -3,14 +3,14 @@
 // A design run that mutated files only outside the project root used to end
 // with the generic "finished without producing a deliverable project file"
 // error even though its writes succeeded (and were listed in the turn's file
-// summary). These tests cover the conservative external-path counter and the
+// summary). These tests cover the conservative mutation-path summary and the
 // external_only finalization path, which keeps the persisted delivery state
 // at no_result while surfacing an accurate detail message.
 import { describe, expect, it } from 'vitest';
 import {
   applyDesignDeliveryOutcome,
-  countExternalMutationPaths,
   designDeliveryFailureDetail,
+  summarizeMutationPaths,
 } from '../../src/components/ProjectView';
 import type { ChatMessage } from '../../src/types';
 
@@ -23,72 +23,105 @@ const writeEvent = (id: string, filePath: string) => ({
   input: { file_path: filePath },
 });
 
-describe('countExternalMutationPaths', () => {
+const okResult = (toolUseId: string) => ({
+  kind: 'tool_result' as const,
+  toolUseId,
+  content: 'ok',
+  isError: false,
+});
+
+const errorResult = (toolUseId: string) => ({
+  kind: 'tool_result' as const,
+  toolUseId,
+  content: 'permission denied',
+  isError: true,
+});
+
+describe('summarizeMutationPaths', () => {
   it('counts an absolute write that provably lands outside the project root', () => {
     expect(
-      countExternalMutationPaths(
-        [writeEvent('w-1', 'C:\\Users\\alice\\Desktop\\notes.md')],
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'C:\\Users\\alice\\Desktop\\notes.md'), okResult('w-1')],
         undefined,
         ROOT,
       ),
-    ).toBe(1);
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 1 });
   });
 
-  it('does not count a write inside the project root', () => {
+  it('counts a write inside the project root as internal', () => {
     expect(
-      countExternalMutationPaths([writeEvent('w-1', 'C:/work/site/index.html')], undefined, ROOT),
-    ).toBe(0);
-  });
-
-  it('does not count a relative-path edit', () => {
-    expect(
-      countExternalMutationPaths(
-        [{ kind: 'tool_use' as const, id: 'e-1', name: 'Edit', input: { file_path: 'index.html' } }],
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'C:/work/site/index.html'), okResult('w-1')],
         undefined,
         ROOT,
       ),
-    ).toBe(0);
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 0 });
   });
 
-  it('counts a simple Bash rm of an external file', () => {
+  it('counts a relative-path edit as internal', () => {
     expect(
-      countExternalMutationPaths(
-        [{ kind: 'tool_use' as const, id: 'b-1', name: 'Bash', input: { command: 'rm C:/tmp/stale.html' } }],
+      summarizeMutationPaths(
+        [
+          { kind: 'tool_use' as const, id: 'e-1', name: 'Edit', input: { file_path: 'index.html' } },
+          okResult('e-1'),
+        ],
         undefined,
         ROOT,
       ),
-    ).toBe(1);
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 0 });
+  });
+
+  it('counts a simple Bash rm of an external file as external', () => {
+    expect(
+      summarizeMutationPaths(
+        [
+          {
+            kind: 'tool_use' as const,
+            id: 'b-1',
+            name: 'Bash',
+            input: { command: 'rm C:/tmp/stale.html' },
+          },
+          okResult('b-1'),
+        ],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 1 });
   });
 
   it('trusts a managed-project alias path regardless of the resolved root', () => {
     expect(
-      countExternalMutationPaths(
-        [writeEvent('w-1', '/data/projects/proj-1/page.html')],
+      summarizeMutationPaths(
+        [writeEvent('w-1', '/data/projects/proj-1/page.html'), okResult('w-1')],
         'proj-1',
         ROOT,
       ),
-    ).toBe(0);
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 0 });
   });
 
   it('stays conservative when no project root is known', () => {
     expect(
-      countExternalMutationPaths(
-        [writeEvent('w-1', 'C:\\Users\\alice\\Desktop\\notes.md')],
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'C:\\Users\\alice\\Desktop\\notes.md'), okResult('w-1')],
         undefined,
         null,
       ),
-    ).toBe(0);
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 0 });
   });
 
-  it('counts a `..` escape that lexically resolves outside the root', () => {
+  it('counts a `..` escape that lexically resolves outside the root as external', () => {
     expect(
-      countExternalMutationPaths([writeEvent('w-1', 'C:/work/site/../escape.md')], undefined, ROOT),
-    ).toBe(1);
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'C:/work/site/../escape.md'), okResult('w-1')],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 1 });
   });
 
   it('ignores reads of external paths', () => {
     expect(
-      countExternalMutationPaths(
+      summarizeMutationPaths(
         [
           {
             kind: 'tool_use' as const,
@@ -96,11 +129,67 @@ describe('countExternalMutationPaths', () => {
             name: 'Read',
             input: { file_path: 'C:/Users/alice/Desktop/notes.md' },
           },
+          okResult('r-1'),
         ],
         undefined,
         ROOT,
       ),
-    ).toBe(0);
+    ).toEqual({ mutationPathCount: 0, externalMutationPathCount: 0 });
+  });
+
+  it('excludes an errored external write entirely — a rejected write is not evidence', () => {
+    expect(
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'C:\\Users\\alice\\Desktop\\notes.md'), errorResult('w-1')],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 0, externalMutationPathCount: 0 });
+  });
+
+  it('excludes a mutation whose result never arrived', () => {
+    expect(
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'C:\\Users\\alice\\Desktop\\notes.md')],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 0, externalMutationPathCount: 0 });
+  });
+
+  it('summarizes mixed internal and external writes without conflating them', () => {
+    expect(
+      summarizeMutationPaths(
+        [
+          writeEvent('w-1', 'C:/work/site/index.html'),
+          okResult('w-1'),
+          writeEvent('w-2', 'C:\\Users\\alice\\Desktop\\notes.md'),
+          okResult('w-2'),
+        ],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 2, externalMutationPathCount: 1 });
+  });
+
+  it('treats Windows drive paths as case-insensitive against the root', () => {
+    expect(
+      summarizeMutationPaths(
+        [writeEvent('w-1', 'c:/Work/Site/index.html'), okResult('w-1')],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 0 });
+  });
+
+  it('keeps POSIX paths case-sensitive', () => {
+    expect(
+      summarizeMutationPaths(
+        [writeEvent('w-1', '/SRV/site/index.html'), okResult('w-1')],
+        undefined,
+        '/srv/site',
+      ),
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 1 });
   });
 });
 
