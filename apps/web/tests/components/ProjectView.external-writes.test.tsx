@@ -172,6 +172,19 @@ describe('summarizeMutationPaths', () => {
     ).toEqual({ mutationPathCount: 2, externalMutationPathCount: 1 });
   });
 
+  it('classifies a mutation of the project root itself as internal', () => {
+    expect(
+      summarizeMutationPaths(
+        [
+          { kind: 'tool_use' as const, id: 'd-1', name: 'Delete', input: { path: 'C:/work/site' } },
+          okResult('d-1'),
+        ],
+        undefined,
+        ROOT,
+      ),
+    ).toEqual({ mutationPathCount: 1, externalMutationPathCount: 0 });
+  });
+
   it('treats Windows drive paths as case-insensitive against the root', () => {
     expect(
       summarizeMutationPaths(

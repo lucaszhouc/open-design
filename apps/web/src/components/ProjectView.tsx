@@ -9843,7 +9843,9 @@ function isProvablyOutsideProject(
   const slashedRoot = projectRoot ? projectRoot.replace(/\\/g, '/') : null;
   const rootSegments = slashedRoot ? lexicallyNormalizePathSegments(slashedRoot) : null;
   if (!slashedRoot || !rootSegments || rootSegments.length === 0) return false;
-  if (segments.length <= rootSegments.length) return true;
+  // Only strictly shorter paths are external outright; an equal-length path
+  // still runs the segment comparison so the project root itself is internal.
+  if (segments.length < rootSegments.length) return true;
   const foldCase = isWindowsDrivePath(slashed) && isWindowsDrivePath(slashedRoot);
   for (let i = 0; i < rootSegments.length; i += 1) {
     const left = foldCase ? segments[i]!.toLowerCase() : segments[i];
