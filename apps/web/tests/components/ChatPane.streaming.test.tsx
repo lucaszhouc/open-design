@@ -216,6 +216,7 @@ function mockDataTransfer(): DataTransfer {
 }
 
 beforeEach(() => {
+  sessionStorage.clear();
   MockResizeObserver.instances = [];
   vi.stubGlobal('ResizeObserver', MockResizeObserver);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
@@ -338,6 +339,198 @@ describe('ChatPane streaming state', () => {
     expect(retryableAssistantMessage(messages, failed.id, true)).toBeNull();
     expect(retryableAssistantMessage([...messages, { ...messages[0]!, id: 'user-2' }], failed.id, false))
       .toBeNull();
+  });
+
+  it('hides a stale run-recovery card after a later assistant run succeeds', () => {
+    const restartError = 'Run interrupted because the daemon restarted.';
+    const messages: ChatMessage[] = [
+      { id: 'user-1', role: 'user', content: 'Build the report', createdAt: 0 },
+      {
+        id: 'assistant-failed',
+        role: 'assistant',
+        content: 'I started the report.',
+        createdAt: 1,
+        endedAt: 2,
+        runStatus: 'failed',
+        events: [
+          {
+            kind: 'status',
+            label: 'error',
+            detail: restartError,
+            code: 'DAEMON_RESTARTED',
+          },
+        ],
+      },
+      { id: 'user-2', role: 'user', content: 'Continue', createdAt: 3 },
+      {
+        id: 'assistant-succeeded',
+        role: 'assistant',
+        content: 'The report is complete.',
+        createdAt: 4,
+        endedAt: 5,
+        runStatus: 'succeeded',
+      },
+    ];
+
+    const { container } = render(
+      <ChatPane
+        projectKindForTracking="prototype"
+        messages={messages}
+        streaming={false}
+        error={restartError}
+        errorSourceAssistantId="assistant-failed"
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+      />,
+    );
+
+    expect(container.querySelector('[data-user-action-card="run-recovery"]')).toBeNull();
+  });
+
+  it('keeps a repeated current daemon-restart error visible before its failure is persisted', () => {
+    const restartError = 'Run interrupted because the daemon restarted.';
+    const messages: ChatMessage[] = [
+      { id: 'user-1', role: 'user', content: 'Build the report', createdAt: 0 },
+      {
+        id: 'assistant-failed',
+        role: 'assistant',
+        content: 'I started the report.',
+        createdAt: 1,
+        endedAt: 2,
+        runStatus: 'failed',
+        events: [
+          {
+            kind: 'status',
+            label: 'error',
+            detail: restartError,
+            code: 'DAEMON_RESTARTED',
+          },
+        ],
+      },
+      { id: 'user-2', role: 'user', content: 'Continue', createdAt: 3 },
+      {
+        id: 'assistant-succeeded',
+        role: 'assistant',
+        content: 'The report is complete.',
+        createdAt: 4,
+        endedAt: 5,
+        runStatus: 'succeeded',
+      },
+      { id: 'user-3', role: 'user', content: 'Make one more change', createdAt: 6 },
+    ];
+
+    const { container } = render(
+      <ChatPane
+        projectKindForTracking="prototype"
+        messages={messages}
+        streaming={false}
+        error={restartError}
+        errorSourceAssistantId="assistant-current"
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+      />,
+    );
+
+    expect(container.querySelector('[data-user-action-card="run-recovery"]')).toBeTruthy();
+  });
+
+  it('keeps a current non-run error visible after an assistant run succeeds', () => {
+    const messages: ChatMessage[] = [
+      { id: 'user-1', role: 'user', content: 'Build the report', createdAt: 0 },
+      {
+        id: 'assistant-succeeded',
+        role: 'assistant',
+        content: 'The report is complete.',
+        createdAt: 1,
+        endedAt: 2,
+        runStatus: 'succeeded',
+      },
+    ];
+
+    const { container } = render(
+      <ChatPane
+        projectKindForTracking="prototype"
+        messages={messages}
+        streaming={false}
+        error="Could not load the conversation."
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+      />,
+    );
+
+    expect(container.querySelector('[data-user-action-card="run-recovery"]')).toBeTruthy();
+  });
+
+  it('prefers a current non-run error over the latest failed-run detail', () => {
+    const currentError = 'Could not load the conversation.';
+    const messages: ChatMessage[] = [
+      { id: 'user-1', role: 'user', content: 'Build the report', createdAt: 0 },
+      {
+        id: 'assistant-failed',
+        role: 'assistant',
+        content: 'I started the report.',
+        createdAt: 1,
+        endedAt: 2,
+        runStatus: 'failed',
+        events: [
+          {
+            kind: 'status',
+            label: 'error',
+            detail: 'Run interrupted because the daemon restarted.',
+            code: 'DAEMON_RESTARTED',
+          },
+        ],
+      },
+    ];
+
+    const { container } = render(
+      <ChatPane
+        projectKindForTracking="prototype"
+        messages={messages}
+        streaming={false}
+        error={currentError}
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+      />,
+    );
+
+    const recoveryCard = container.querySelector<HTMLElement>(
+      '[data-user-action-card="run-recovery"]',
+    );
+    expect(recoveryCard).toBeTruthy();
+    expect(within(recoveryCard!).getByText(currentError)).toBeTruthy();
   });
 
   it.each(['no_result', 'delivery_failed'] as const)(
@@ -1016,6 +1209,155 @@ Expected output:
       ],
     );
   });
+
+  it('hides the stale pinned todo after continuing its remaining tasks', async () => {
+    const onContinueRemainingTasks = vi.fn(() => true);
+    const messages: ChatMessage[] = [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: '',
+        createdAt: 1,
+        endedAt: 2,
+        runStatus: 'failed',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'todo-1',
+            name: 'TodoWrite',
+            input: {
+              todos: [
+                { content: 'Build prototype', status: 'completed' },
+                { content: 'Run QA', status: 'pending' },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+
+    const { container, rerender } = render(
+      <ChatPane
+        messages={messages}
+        streaming={false}
+        error={null}
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+        onContinueRemainingTasks={onContinueRemainingTasks}
+      />,
+    );
+
+    fireEvent.click(container.querySelector<HTMLButtonElement>('.op-todo-continue')!);
+
+    expect(onContinueRemainingTasks).toHaveBeenCalledOnce();
+    await waitFor(() => {
+      expect(container.querySelector('.chat-pinned-todo')).toBeNull();
+    });
+
+    rerender(
+      <ChatPane
+        messages={[
+          ...messages,
+          {
+            id: 'assistant-2',
+            role: 'assistant',
+            content: '',
+            createdAt: 3,
+            runStatus: 'running',
+            events: [
+              {
+                kind: 'tool_use',
+                id: 'todo-2',
+                name: 'TodoWrite',
+                input: {
+                  todos: [
+                    { content: 'Build prototype', status: 'completed' },
+                    { content: 'Run QA', status: 'pending' },
+                  ],
+                },
+              },
+            ],
+          },
+        ]}
+        streaming
+        error={null}
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={vi.fn()}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+        onContinueRemainingTasks={onContinueRemainingTasks}
+      />,
+    );
+
+    expect(container.querySelector('.chat-pinned-todo')).not.toBeNull();
+  });
+
+  it('keeps a continued todo snapshot hidden after the conversation remounts', async () => {
+    const messages: ChatMessage[] = [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        content: '',
+        createdAt: 1,
+        endedAt: 2,
+        runStatus: 'failed',
+        events: [
+          {
+            kind: 'tool_use',
+            id: 'todo-1',
+            name: 'update_plan',
+            input: {
+              plan: [
+                { step: 'Build prototype', status: 'completed' },
+                { step: 'Run QA', status: 'pending' },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    const props = {
+      messages,
+      streaming: false,
+      error: null,
+      projectId: 'project-1',
+      projectFiles: [],
+      onEnsureProject: async () => 'project-1',
+      onSend: vi.fn(),
+      onStop: vi.fn(),
+      conversations,
+      activeConversationId: 'conv-1',
+      onSelectConversation: vi.fn(),
+      onDeleteConversation: vi.fn(),
+      projectMetadata,
+      onContinueRemainingTasks: vi.fn(() => true),
+    };
+
+    const firstMount = render(<ChatPane {...props} />);
+    fireEvent.click(firstMount.container.querySelector<HTMLButtonElement>('.op-todo-continue')!);
+    await waitFor(() => {
+      expect(firstMount.container.querySelector('.chat-pinned-todo')).toBeNull();
+    });
+    firstMount.unmount();
+
+    const secondMount = render(<ChatPane {...props} />);
+    expect(secondMount.container.querySelector('.chat-pinned-todo')).toBeNull();
+  });
+
   it('shows several queued prompts above the composer with compact controls', () => {
     const onRemoveQueuedSend = vi.fn();
     const onSendQueuedNow = vi.fn();
