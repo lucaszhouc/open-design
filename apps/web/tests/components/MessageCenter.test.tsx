@@ -87,6 +87,23 @@ describe('MessageCenter', () => {
     expect(String(anonymousPull?.[0])).not.toContain('startedAt=');
   });
 
+  it('falls back to the public feed when the AMR runtime is unavailable', async () => {
+    mockFetch({
+      onStatus: async () => Response.json({ error: 'amr-runtime-unavailable' }, { status: 503 }),
+    });
+
+    renderMessageCenter();
+    const dialog = await openCenter();
+
+    expect(within(dialog).getByText('Open Design 0.14 is available')).toBeTruthy();
+    expect(
+      vi.mocked(fetch).mock.calls.some(([url]) =>
+        String(url).includes('/api/integrations/vela/message-center-public/messages?'),
+      ),
+    ).toBe(true);
+    expect(screen.queryByText('Check failed. Please retry.')).toBeNull();
+  });
+
   it('keeps anonymous read state locally and restores it', async () => {
     renderMessageCenter();
     await openCenter();
@@ -113,11 +130,20 @@ describe('MessageCenter', () => {
     await waitFor(() => expect(screen.getByText('All caught up')).toBeTruthy());
   });
 
-  it('opens CTA URLs with the existing external-link behavior', async () => {
+  it('expands the whole message row and opens its CTA', async () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null);
     renderMessageCenter();
     await openCenter();
-    fireEvent.click(screen.getByRole('button', { name: /Open Design 0\.14 is available/ }));
+    const row = screen.getByRole('button', { name: /Open Design 0\.14 is available/ });
+
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button', { name: 'View update' })).toBeNull();
+
+    fireEvent.click(row);
+
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(row.closest('article')?.className).toContain('itemExpanded');
+    expect(screen.getByText('The new release is ready.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'View update' }));
     expect(open).toHaveBeenCalledWith('https://open-design.ai/update', '_blank', 'noopener,noreferrer');
   });
@@ -312,6 +338,34 @@ describe('MessageCenter', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => expect(screen.getByText('No messages yet')).toBeTruthy());
     expect(messageRequests).toBeGreaterThanOrEqual(2);
+  });
+
+  it('renders cached messages when a published date is invalid', async () => {
+    const cachedMessages = [
+      {
+        ...defaultMessages[0]!,
+        id: 'invalid-date',
+        title: 'Cached update',
+        body: 'Cached body remains visible.',
+        publishedAt: 'not-a-date',
+        readAt: null,
+        ctaLabel: null,
+        ctaUrl: null,
+      },
+    ] satisfies MessageCenterMessage[];
+    localStorage.setItem('open-design.message-center.anonymous-started-at.v1', '2026-07-16T00:00:00.000Z');
+    localStorage.setItem('open-design.message-center.anonymous-messages.v1', JSON.stringify(cachedMessages));
+    localStorage.setItem('open-design.message-center.anonymous-read-ids.v1', JSON.stringify([]));
+    mockFetch({
+      onMessages: async () => new Response(null, { status: 500 }),
+    });
+
+    renderMessageCenter();
+    const dialog = await openCenter(1);
+
+    expect(within(dialog).getByText('Cached update')).toBeTruthy();
+    expect(within(dialog).getByText('Cached body remains visible.')).toBeTruthy();
+    expect(dialog.querySelector('time')).toBeNull();
   });
 
   it('hydrates cached anonymous state through the ref-backed source of truth', async () => {

@@ -19,7 +19,11 @@ import {
   shouldInstallInternalPackageForMacPrebundle,
   shouldUseMacStandalonePrebundle,
 } from "../mac-prebundle.js";
-import { copyBundledResourceTrees } from "../resources.js";
+import {
+  prepareNodePtyRuntime,
+  resolveNodePtyRuntimeArch,
+} from "../node-pty-runtime.js";
+import { copyBundledResourceTrees, packBundledDshRuntime } from "../resources.js";
 import { copyOptionalVelaCliBinary } from "../vela-cli.js";
 import { electronBuilderVersionForAppVersion } from "../versions.js";
 import { runEsbuild, runNpmInstall, runPnpm } from "./commands.js";
@@ -140,6 +144,10 @@ export async function copyResourceTree(config: ToolPackConfig, paths: MacPaths):
     workspaceRoot: config.workspaceRoot,
     resourceRoot: paths.resourceRoot,
   });
+  await packBundledDshRuntime({
+    workspaceRoot: config.workspaceRoot,
+    resourceRoot: paths.resourceRoot,
+  });
   await copyOptionalVelaCliBinary({
     platform: "mac",
     requireBundled: config.requireVelaCli,
@@ -165,6 +173,7 @@ export function renderMacPackagedConfig(options: {
       ...(options.config.updateMetadataUrl == null ? {} : { updateMetadataUrl: options.config.updateMetadataUrl }),
       ...(options.config.posthogKey == null ? {} : { posthogKey: options.config.posthogKey }),
       ...(options.config.posthogHost == null ? {} : { posthogHost: options.config.posthogHost }),
+      ...(options.config.velaWebUrl == null ? {} : { velaWebUrl: options.config.velaWebUrl }),
       ...(options.usePrebundledStandaloneWeb ? { webSidecarEntryRelative: MAC_PREBUNDLED_WEB_SIDECAR_RELATIVE_PATH } : {}),
       webOutputMode: options.config.webOutputMode,
       ...(options.config.portable ? {} : { namespaceBaseRoot: options.config.roots.runtime.namespaceBaseRoot }),
@@ -372,5 +381,10 @@ export async function writeAssembledApp(
   if (usePrebundledStandaloneWeb) {
     await copyMacPrebundleRuntimeDependencies(config, paths.assembledAppRoot);
   }
+  await prepareNodePtyRuntime({
+    appRoot: paths.assembledAppRoot,
+    arch: resolveNodePtyRuntimeArch(process.arch),
+    platform: "darwin",
+  });
   await runMacElectronRebuild(config, paths.assembledAppRoot);
 }

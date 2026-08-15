@@ -14,10 +14,16 @@ import {
   type AmrArtifactUpgradeRequestDetail,
   type AmrUpsellRuntimeClass,
 } from '../runtime/amr-artifact-upgrade';
-import { isFreeAmrPlan } from '../runtime/amr-low-balance-plan';
+import { isFreePlanTier } from '../collab/team-plan';
 import { AmrArtifactUpgradeDialog } from './AmrArtifactUpgradeDialog';
 
 interface Props {
+  /**
+   * The resolved raw plan id (see `resolvePlanTier`), NOT vela's account-scoped
+   * `account.plan` — a team member reads `free` there while their team holds a
+   * paid plan. `isFreePlanTier` re-asserts that here so a team-namespaced id can
+   * never open this free-user upsell even if a caller feeds the raw projection.
+   */
   plan: string | null;
   planResolved: boolean;
   /** How the active conversation executes. 'cloud' (the AMR agent) and 'api'
@@ -116,6 +122,7 @@ export function AmrArtifactUpgradeGate({
         !detail
         || typeof detail.runId !== 'string'
         || !detail.runId.trim()
+        || detail.agentId !== 'amr'
         || !sessionKey
         || detail.result !== 'success'
         || !Number.isFinite(detail.artifactCount)
@@ -147,7 +154,7 @@ export function AmrArtifactUpgradeGate({
         || detail.source !== 'chat_send'
         || !eligibleSessionsRef.current.has(sessionKey)
         || !planResolved
-        || !isFreeAmrPlan(plan)
+        || !isFreePlanTier(plan)
         || (runtimeClass === 'cli' && isAmrArtifactUpgradeCliIntroShown())
         || isAmrArtifactUpgradeOptedOut()
       ) {
@@ -182,7 +189,7 @@ export function AmrArtifactUpgradeGate({
     // racing the pause — a Send the gate no longer cares about continues.
     if (
       !planResolved
-      || !isFreeAmrPlan(plan)
+      || !isFreePlanTier(plan)
       || (runtimeClass === 'cli' && isAmrArtifactUpgradeCliIntroShown())
       || isAmrArtifactUpgradeOptedOut()
     ) {
@@ -241,7 +248,7 @@ export function AmrArtifactUpgradeGate({
       runtimeClass !== 'cli'
       || (onHomeOfferChange != null && !isAmrArtifactUpgradeCliIntroShown());
     if (
-      isFreeAmrPlan(plan)
+      isFreePlanTier(plan)
       && cliIntroAvailable
       && !isAmrArtifactUpgradeOptedOut()
       && !hasOpenModal()
@@ -255,7 +262,7 @@ export function AmrArtifactUpgradeGate({
   }, [onHomeOfferChange, pendingHomeOffer, plan, planResolved, runtimeClass]);
 
   useEffect(() => {
-    if (!planResolved || isFreeAmrPlan(plan)) return;
+    if (!planResolved || isFreePlanTier(plan)) return;
     onHomeOfferChange?.(null);
     if (!dialogSessionKey) return;
     const pending = pendingSendRef.current;
