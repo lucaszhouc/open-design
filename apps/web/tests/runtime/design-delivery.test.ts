@@ -231,7 +231,7 @@ describe('resolveDesignDeliveryOutcome', () => {
   it('keeps no_result for mixed internal/external mutations', () => {
     // One in-project delete plus one external write: neither produced nor
     // trace-object files exist, but not EVERY mutation was external, so the
-    // "wrote files only outside the project" wording would be wrong.
+    // "changed files only outside the project" wording would be wrong.
     expect(
       resolveDesignDeliveryOutcome({
         sessionMode: 'design',

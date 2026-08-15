@@ -12,6 +12,7 @@ import {
   designDeliveryFailureDetail,
   summarizeMutationPaths,
 } from '../../src/components/ProjectView';
+import { resolveDesignDeliveryOutcome } from '../../src/runtime/design-delivery';
 import type { ChatMessage } from '../../src/types';
 
 const ROOT = 'C:/work/site';
@@ -222,7 +223,7 @@ describe('applyDesignDeliveryOutcome — external_only finalization', () => {
       kind: 'status',
       label: 'error',
       detail:
-        'The run wrote files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.',
+        'The run changed files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.',
     });
   });
 });
@@ -237,7 +238,34 @@ describe('designDeliveryFailureDetail', () => {
 
   it('returns the external-only detail for external_only', () => {
     expect(designDeliveryFailureDetail('external_only')).toBe(
-      'The run wrote files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.',
+      'The run changed files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.',
+    );
+  });
+
+  it('stays accurate for a delete-only external turn — the copy says changed, not wrote', () => {
+    const events = [
+      {
+        kind: 'tool_use' as const,
+        id: 'b-1',
+        name: 'Bash',
+        input: { command: 'rm C:/tmp/stale.html' },
+      },
+      okResult('b-1'),
+    ];
+    const summary = summarizeMutationPaths(events, undefined, ROOT);
+    expect(summary).toEqual({ mutationPathCount: 1, externalMutationPathCount: 1 });
+    const outcome = resolveDesignDeliveryOutcome({
+      sessionMode: 'design',
+      runStatus: 'succeeded',
+      content: 'Removed the stale file from C:/tmp.',
+      events,
+      producedFileCount: 0,
+      traceObjectFileCount: 0,
+      ...summary,
+    });
+    expect(outcome).toBe('external_only');
+    expect(designDeliveryFailureDetail(outcome)).toBe(
+      'The run changed files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.',
     );
   });
 

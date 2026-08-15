@@ -9586,7 +9586,7 @@ const DESIGN_RESULT_MISSING_DETAIL =
 const DESIGN_RESULT_DELIVERY_FAILED_DETAIL =
   'The design result was generated, but Open Design could not save it to the project.';
 const DESIGN_RESULT_EXTERNAL_ONLY_DETAIL =
-  'The run wrote files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.';
+  'The run changed files only outside the project folder, so nothing was delivered to the project. Design runs track results as project files - use Chat mode for tasks that are not meant to produce one.';
 
 export function designDeliveryFailureDetail(
   outcome: DesignDeliveryOutcome,
