@@ -15,14 +15,18 @@ import { ChatPane } from '../../src/components/ChatPane';
 import type { Conversation } from '../../src/types';
 import type { ChatMessage } from '../../src/types';
 
-vi.mock('../../src/i18n', () => ({
-  useT: () => (key: string, vars?: Record<string, string | number>) => {
+vi.mock('../../src/i18n', () => {
+  const translate = (key: string, vars?: Record<string, string | number>) => {
     if (vars && Object.keys(vars).length > 0) {
       return `${key} ${Object.values(vars).join(' ')}`;
     }
     return key;
-  },
-}));
+  };
+  return {
+    useI18n: () => ({ locale: 'en', setLocale: () => undefined, t: translate }),
+    useT: () => translate,
+  };
+});
 
 vi.mock('../../src/components/AssistantMessage', () => ({
   AssistantMessage: ({ message }: { message: ChatMessage }) => (
