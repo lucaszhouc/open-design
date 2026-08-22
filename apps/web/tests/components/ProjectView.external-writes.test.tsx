@@ -232,7 +232,7 @@ describe('designDeliveryFailureDetail', () => {
   it('prefers the persistence error for delivery_failed', () => {
     expect(designDeliveryFailureDetail('delivery_failed', 'disk full')).toBe('disk full');
     expect(designDeliveryFailureDetail('delivery_failed')).toBe(
-      'The design result was generated, but Open Design could not save it to the project.',
+      'The design result was generated, but OpenDesign could not save it to the project.',
     );
   });
 
