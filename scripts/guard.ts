@@ -11,7 +11,6 @@ import { checkDesignSystemComponentFixtureReport } from "./check-components-fixt
 import { checkDesignSystemFlagParity } from "./check-design-system-flag-parity.ts";
 import { checkComponentsManifestExtraction } from "./check-components-manifest-extraction.ts";
 import { checkPluginPreviewManifest } from "./check-plugin-preview-manifest.ts";
-import { validatePlaywrightSuiteTopology } from "../e2e/lib/playwright/suites.ts";
 import {
   checkDesignSystemA1RequiredTokens,
   checkDesignSystemA2DefaultsParity,
@@ -22,6 +21,8 @@ import {
 } from "./check-tokens-fixture-sync.ts";
 import { checkCraftReferences } from "./lint-craft-references.ts";
 import { collectCssHardcodedColorMatches, cssWideAndSpecialColorKeywords, realNamedColors } from "./style-policy.ts";
+import { checkScriptsLibraryArchitecture } from "./lib/guard/architecture.ts";
+import { runGuardChecks, type GuardCheck, type GuardContext } from "./lib/guard/core.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const allowedE2eScripts = new Set([
@@ -29,11 +30,6 @@ const allowedE2eScripts = new Set([
   "e2e/scripts/release-smoke.ts",
   "e2e/scripts/visual-report.ts",
 ]);
-
-type GuardCheck = {
-  name: string;
-  run: () => Promise<boolean>;
-};
 
 function toRepositoryPath(filePath: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
@@ -52,6 +48,8 @@ const residualSkippedDirectories = new Set([
   ".od",
   ".od-e2e",
   ".opencode",
+  // Local agent deepwork/worktree scratch (git-ignored; not product source).
+  ".slim",
   ".task",
   ".tmp",
   ".vite",
@@ -499,6 +497,28 @@ async function collectTestLayoutViolations(directory: string): Promise<string[]>
   }
 
   return violations;
+}
+
+async function checkScriptsTestFree(): Promise<boolean> {
+  const scriptsFiles = await collectRepositoryFiles(path.join(repoRoot, "scripts"), testLayoutSkippedDirectories);
+  const violations = scriptsFiles.filter(isScriptTestFile);
+
+  if (violations.length > 0) {
+    console.error(
+      "Root scripts/ is test-free: move behavior-contract coverage to e2e/tests/scripts/ (see e2e/AGENTS.md):",
+    );
+    for (const violation of violations) {
+      console.error(`- ${violation}`);
+    }
+    return false;
+  }
+
+  console.log("Scripts test-free check passed: no test files under root scripts/.");
+  return true;
+}
+
+export function isScriptTestFile(repositoryPath: string): boolean {
+  return /\.test\.[^/]+$/.test(repositoryPath);
 }
 
 async function checkTestLayout(): Promise<boolean> {
@@ -1166,7 +1186,7 @@ function collectStylePolicyViolationsFromSource(repositoryPath: string, source: 
         filePath: repositoryPath,
         lineNumber: lineNumberForIndex(source, match.index ?? 0),
         match: match[0],
-        reason: "default Tailwind palette classes must use Open Design token utilities instead",
+        reason: "default Tailwind palette classes must use OpenDesign token utilities instead",
       });
     }
   }
@@ -1183,7 +1203,7 @@ function collectStylePolicyViolationsFromSource(repositoryPath: string, source: 
           source,
           match.index,
           value,
-          "unregistered hardcoded UI colors must use Open Design tokens or an explicit allowlist entry",
+          "unregistered hardcoded UI colors must use OpenDesign tokens or an explicit allowlist entry",
         );
       }
     } else {
@@ -1198,7 +1218,7 @@ function collectStylePolicyViolationsFromSource(repositoryPath: string, source: 
           source,
           match.index ?? 0,
           value,
-          "unregistered hardcoded UI colors must use Open Design tokens or an explicit allowlist entry",
+          "unregistered hardcoded UI colors must use OpenDesign tokens or an explicit allowlist entry",
         );
       }
     }
@@ -1259,7 +1279,7 @@ async function checkStylePolicy(): Promise<boolean> {
     for (const violation of violations) {
       console.error(`- ${violation.filePath}:${violation.lineNumber} \`${violation.match}\` -> ${violation.reason}`);
     }
-    console.error("Use Open Design token utilities/CSS variables or add a narrow allowlist entry with a reason.");
+    console.error("Use OpenDesign token utilities/CSS variables or add a narrow allowlist entry with a reason.");
     return false;
   }
 
@@ -1267,50 +1287,27 @@ async function checkStylePolicy(): Promise<boolean> {
   return true;
 }
 
-async function checkCiTopology(): Promise<boolean> {
-  const ciWorkflow = await readFile(path.join(repoRoot, ".github/workflows/ci.yml"), "utf8");
-  const errors = [
-    ...validatePlaywrightSuiteTopology(),
-    ...[
-      "run: node --experimental-strip-types scripts/scopes.ts github-output",
-      "ci_mode: ${{ steps.detect.outputs.ci_mode }}",
-      "ui_p0_validation_required: ${{ steps.detect.outputs.ui_p0_validation_required }}",
-      "run_ui_p0: ${{ steps.detect.outputs.run_ui_p0 }}",
-      "ui_p0_matrix: ${{ steps.detect.outputs.ui_p0_matrix }}",
-      "visual_matrix: ${{ steps.detect.outputs.visual_matrix }}",
-      "include: ${{ fromJSON(needs.scopes.outputs.ui_p0_matrix) }}",
-      "include: ${{ fromJSON(needs.scopes.outputs.visual_matrix) }}",
-      "needs.scopes.outputs.run_ui_p0 == 'true'",
-      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group critical-extras",
-      "pnpm -C e2e exec tsx scripts/playwright.ts run-ui-group ${{ matrix.shard }}",
-    ]
-      .filter((needle) => !ciWorkflow.includes(needle))
-      .map((needle) => `.github/workflows/ci.yml is missing ${needle}`),
-  ];
+let crossAppImportsResult: Promise<boolean> | undefined;
 
-  if (errors.length > 0) {
-    console.error("CI topology check failed:");
-    for (const error of errors) console.error(`- ${error}`);
-    return false;
-  }
-
-  console.log("CI topology check passed: scopes, Playwright suites, and workflow matrices stay aligned.");
-  return true;
+function checkCrossAppImportsOnce(): Promise<boolean> {
+  crossAppImportsResult ??= Promise.resolve(checkCrossAppImports());
+  return crossAppImportsResult;
 }
 
 const checks: GuardCheck[] = [
   { name: "residual JavaScript", run: checkResidualJavaScript },
   { name: "package dependency specs", run: checkPackageDependencySpecs },
   { name: "product neutrality", run: checkProductNeutrality },
-  { name: "cross-app imports", run: checkCrossAppImports },
+  { name: "cross-app imports", run: checkCrossAppImportsOnce },
   { name: "@ts-nocheck import resolution", run: checkTsNocheckImports },
   { name: "test layout", run: checkTestLayout },
+  { name: "scripts test-free", run: checkScriptsTestFree },
+  { name: "scripts library architecture", run: checkScriptsLibraryArchitecture },
   { name: "e2e layout", run: checkE2eLayout },
   { name: "web test layout", run: checkWebTestLayout },
   { name: "web import isolation", run: checkWebImportIsolation },
   { name: "tools layout", run: checkToolsLayout },
   { name: "style policy", run: checkStylePolicy },
-  { name: "CI topology", run: checkCiTopology },
   { name: "craft references", run: checkCraftReferences },
   { name: "plugin preview manifest", run: checkPluginPreviewManifest },
   { name: "design system manifests", run: checkDesignSystemManifests },
@@ -1326,22 +1323,12 @@ const checks: GuardCheck[] = [
   { name: "design system component manifest extraction", run: checkComponentsManifestExtraction },
 ];
 
-async function runChecks(): Promise<boolean> {
-  const results: boolean[] = [];
-  for (const check of checks) {
-    try {
-      results.push(await check.run());
-    } catch (error) {
-      console.error(`Guard check failed unexpectedly: ${check.name}`);
-      console.error(error);
-      results.push(false);
-    }
-  }
-
-  return results.every(Boolean);
-}
-
 const isMain = process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
-if (isMain && !(await runChecks())) {
-  process.exitCode = 1;
+if (isMain) {
+  // `--list-checks` is the machine-readable registry of repository guard checks.
+  if (process.argv[2] === "--list-checks") {
+    for (const check of checks) console.log(check.name);
+  } else if (!(await runGuardChecks(checks, { repoRoot }))) {
+    process.exitCode = 1;
+  }
 }

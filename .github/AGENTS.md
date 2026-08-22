@@ -11,9 +11,11 @@ Before changing GitHub automation, read the current versions of:
 - `.github/workflows/autofix.atom.yml`
 - `.github/workflows/report.atom.yml`
 - `.github/scripts/handoff.py`
-- `scripts/scopes.ts`
+- `.github/config/runners.json`, `.github/config/scopes.json`, and `.github/config/hash.json`
+- `.github/scripts/runners.py`, `.github/scripts/scopes.py`, and `.github/scripts/hash.py`
+- `specs/current/ci.md` when changing scope rules, confidence tiers, or planner invariants
 - `e2e/tests/packaged-smoke-workflow.test.ts`
-- `scripts/approve-fork-pr-workflows.ts` and `scripts/approve-fork-pr-workflows.test.ts` when touching fork PR approval behavior
+- `scripts/approve-fork-pr-workflows.ts` and `e2e/tests/scripts/approve-fork-pr-workflows.test.ts` when touching fork PR approval behavior
 
 If the change affects cross-workflow behavior, update the topology tests instead of relying only on workflow YAML review.
 
@@ -25,7 +27,7 @@ Business layer:
 
 - Business workflows decide what happened and what should be requested next.
 - `ci.yml` is the main low-privilege PR, merge-queue, and manual validation gate (application merge bar only).
-- `ci.yml` should run validation, decide scopes, and produce typed handoff artifacts.
+- `ci.yml` should resolve runners, compose scope and hash decisions in its Linux `plan` job, run validation, and produce typed handoff artifacts.
 - Packaging checks are standalone and outside the merge gate: `nix.yml` (flake check) and `docker-image.yml` (image validate + publish). Do not re-attach them to `Validate workspace`.
 - Business workflows should not perform trusted writes to PR comments or branches when a capability workflow can do it.
 
@@ -35,6 +37,7 @@ Atomic capability layer:
 - `comment.atom.yml` consumes `handoff-comment-*` artifacts and upserts pure text PR comments.
 - `autofix.atom.yml` consumes `handoff-autofix-*` artifacts and applies same-repository patches.
 - `report.atom.yml` consumes `handoff-report-*` artifacts and handles advanced comments that need trusted materialization, such as dependency install, R2 access, artifact processing, or report generation before upsert.
+- `rerun.atom.yml` watches completed `ci` runs and requests one `gh run rerun --failed` when leaf jobs died to runner/spot cancel. Decision logic lives in `.github/scripts/rerun_infra_cancel.py`; it must not rerun ordinary assertion failures or stale heads.
 - `.github/scripts/handoff.py` owns artifact names, directory layout, discovery, and contract validation for `comment`, `autofix`, and `report` handoffs.
 
 Default rule: do not add a new domain-specific follow-on workflow such as `foo.comment.atom.yml`, `foo.autofix.atom.yml`, or `foo.report.atom.yml` until the flow has been tested against these existing atomic capabilities.
@@ -48,6 +51,21 @@ Default rule: do not add a new domain-specific follow-on workflow such as `foo.c
 - Root `scripts/` remains for repo-level developer checks, product scripts, and guard/test logic. Do not move workflow-only handoff glue there just to make it look more general.
 
 New workflow-owned helpers should usually live under `.github/scripts/`. Prefer TypeScript for project-owned scripts in general, but Python is acceptable for small GitHub runner glue when stdlib portability and low setup cost matter. Keep such exceptions narrow and covered by `pnpm guard` policy.
+
+The CI control plane is deliberately Linux-only and stdlib-only. Runner classes,
+scope rules, and hash declarations live in `.github/config/`; their Python
+entrypoints initialize metadata before workload runners start. A Windows job
+must never invoke these scripts. Keep the four layers independent: runner
+placement, changed-file scopes, input hashes, and fine-grained commands inside
+a workload.
+
+`hash.py` is a static comparison register, not a success cache. It reads the
+previous identity-to-hash map restored by Actions cache, computes the current
+map from Git inputs, and replaces the local state immediately. The plan carries
+that pending map to `validate`, which publishes it only after the gate succeeds;
+a failed run therefore cannot authorize identical-input skips on a fresh retry.
+Only a workload's YAML `if` gives the comparison skip semantics; cache loss or
+corruption starts cold.
 
 ## Handoff contract
 
@@ -123,13 +141,14 @@ Keep `.github/workflows/ci.yml` as the only approved workflow path unless a main
    - Same-repo patch: produce `handoff/autofix` and let `autofix.atom.yml` consume it.
    - Rich/generated comment: produce `handoff/report` and let `report.atom.yml` materialize and upsert it.
    - New naming, paths, or metadata: update `.github/scripts/handoff.py`.
-2. Update scope routing in `scripts/scopes.ts` when a workflow/script should trigger a validation lane.
-3. Update topology coverage in `e2e/tests/packaged-smoke-workflow.test.ts` or the relevant script test.
-4. Run the focused checks:
+2. Update scope routing in `.github/config/scopes.json`, then run `python3 .github/scripts/scopes.py validate`.
+3. Declare workload input closure in `.github/config/hash.json`; use `"*"` until a narrower set has high-confidence evidence.
+4. Update topology coverage in `e2e/tests/packaged-smoke-workflow.test.ts` or the relevant script test.
+5. Run the focused checks:
    - `python3 .github/scripts/handoff.py self-check`
    - `actionlint -color`
    - `pnpm --filter @open-design/e2e test tests/packaged-smoke-workflow.test.ts`
-5. Run repo-level checks before handing off:
+6. Run repo-level checks before handing off:
    - `pnpm guard`
    - `pnpm typecheck`
 
@@ -163,4 +182,4 @@ GitHub artifact behavior is easy to drift: artifact names must be unique per upl
 
 ### Where should tests live?
 
-Cross-workflow topology tests belong in `e2e/tests/` when they observe repository-level behavior. Script-specific behavior can stay next to the script's existing tests. Do not add one-off `*.test.ts` files just because a workflow helper exists; prefer existing topology coverage and helper self-checks when that is enough.
+Cross-workflow topology tests belong in `e2e/tests/` when they observe repository-level behavior. Root `scripts/` is test-free (enforced by `pnpm guard`); script behavior-contract coverage lives in `e2e/tests/scripts/`. Do not add one-off `*.test.ts` files just because a workflow helper exists; prefer existing topology coverage and helper self-checks when that is enough.

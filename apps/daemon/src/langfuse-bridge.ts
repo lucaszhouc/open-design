@@ -12,7 +12,11 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 
-import { modelIdForTracking } from '@open-design/contracts/analytics';
+import {
+  modelIdForTracking,
+  type TrackingRunCancelOrigin,
+  type TrackingRunTerminalTrigger,
+} from '@open-design/contracts/analytics';
 
 import { agentCliEnvForAgent, readAppConfig } from './app-config.js';
 import type { AppVersionInfo } from './app-version.js';
@@ -21,6 +25,7 @@ import { normalizeOpenDesignTelemetryRelayUrl } from './integrations/telemetry-r
 import {
   deriveLangfuseDeliveryState,
   readFeedbackTelemetrySinkConfig,
+  readRunTelemetrySinkConfig,
   reportRunCompleted,
   reportRunFeedback,
   type AgentEventSummary,
@@ -39,6 +44,8 @@ import {
   type TraceObjectSummary,
   type ToolCallSummary,
   type TurnInfo,
+  shouldFullyRedactToolPayload,
+  toolPayloadRedactionPlaceholder,
 } from './langfuse-trace.js';
 import type { PromptStackTelemetry } from './prompt-telemetry.js';
 import { redactSecrets } from './redact.js';
@@ -74,6 +81,8 @@ interface DaemonRunRecord {
   signal?: string | null;
   error?: string | null;
   errorCode?: string | null;
+  cancelOrigin?: TrackingRunCancelOrigin | null;
+  terminalTrigger?: TrackingRunTerminalTrigger | null;
   analyticsTelemetry?: RunTelemetryTimestamps | null;
   createdAt: number;
   updatedAt: number;
@@ -88,6 +97,8 @@ interface DaemonRunRecord {
   // into chatBody / req across the createChatRunService boundary.
   userPrompt?: string;
   model?: string;
+  resolvedModelId?: string | null;
+  preflightAgentCliVersion?: string | null;
   reasoning?: string;
   skillId?: string;
   designSystemId?: string;
@@ -257,6 +268,8 @@ function turnInfoFromRun(
     turn.model = run.model;
   } else if (agentReportedModel && agentReportedModel.trim().length > 0) {
     turn.model = agentReportedModel.trim();
+  } else if (run.resolvedModelId && run.resolvedModelId.trim().length > 0) {
+    turn.model = run.resolvedModelId.trim();
   } else {
     // Keep Langfuse aligned with PostHog's model bucket when the user selected
     // "Default (CLI config)" and the runtime did not emit a resolved model.
@@ -314,6 +327,7 @@ function messageUsageFromAnalytics(
     usage.input_tokens_effective !== undefined ||
     usage.output_tokens !== undefined ||
     usage.total_tokens !== undefined ||
+    usage.thought_tokens !== undefined ||
     usage.cache_read_input_tokens !== undefined ||
     usage.cache_creation_input_tokens !== undefined ||
     usage.uncached_input_tokens !== undefined ||
@@ -331,6 +345,7 @@ function messageUsageFromAnalytics(
   }
   if (usage.output_tokens !== undefined) out.outputTokens = usage.output_tokens;
   if (usage.total_tokens !== undefined) out.totalTokens = usage.total_tokens;
+  if (usage.thought_tokens !== undefined) out.thoughtTokens = usage.thought_tokens;
   if (usage.cache_read_input_tokens !== undefined) {
     out.cacheReadInputTokens = usage.cache_read_input_tokens;
   }
@@ -359,18 +374,19 @@ function eventTimestamp(
     : fallback;
 }
 
-const CONTENT_TOOL_NAMES = new Set([
-  'Read',
-  'Write',
-  'Edit',
-  'MultiEdit',
-  'NotebookEdit',
-]);
-
 function redactLocalPaths(value: string): string {
+  // macOS /Users, Linux /home + /root, Windows C:\Users — Linux is a primary
+  // supported environment, so Bash inputs like `cat /home/alice/.env` must not
+  // leak home directories into Langfuse tool spans.
   return value
-    .replace(/\/Users\/[^/\s"']+(?:\/[^ \n\r\t"'`<>)]*)?/g, '[REDACTED:local_path]')
-    .replace(/[A-Za-z]:\\Users\\[^\\\s"']+(?:\\[^ \n\r\t"'`<>)]*)?/g, '[REDACTED:local_path]');
+    .replace(
+      /\/(?:Users|home|root)\/[^/\s"']+(?:\/[^ \n\r\t"'`<>)]*)?/g,
+      '[REDACTED:local_path]',
+    )
+    .replace(
+      /[A-Za-z]:\\Users\\[^\\\s"']+(?:\\[^ \n\r\t"'`<>)]*)?/g,
+      '[REDACTED:local_path]',
+    );
 }
 
 function serializeToolPayload(
@@ -378,8 +394,11 @@ function serializeToolPayload(
   opts: { toolName: string; direction: 'input' | 'output' },
 ): string | undefined {
   if (value === undefined || value === null) return undefined;
-  if (CONTENT_TOOL_NAMES.has(opts.toolName)) {
-    return `[REDACTED:tool_${opts.direction}:content_tool:${opts.toolName}]`;
+  // Fail-closed: known content tools AND unknown/custom ACP tool names
+  // (kind:other MCP readers, etc.) fully redact. Only bash-like execute
+  // tools keep secret+path lexical masking.
+  if (shouldFullyRedactToolPayload(opts.toolName)) {
+    return toolPayloadRedactionPlaceholder(opts.toolName, opts.direction);
   }
   if (typeof value === 'string') return redactLocalPaths(redactSecrets(value));
   try {
@@ -410,19 +429,43 @@ function collectToolCalls(
       | null
       | undefined;
     if (data?.type === 'tool_use' && typeof data.id === 'string') {
-      const timestamp = eventTimestamp(rec, runStartedAt + rec.id);
-      const summary: ToolCallSummary = {
-        id: data.id,
-        name: typeof data.name === 'string' && data.name ? data.name : 'unknown',
-        startedAt: timestamp,
-        endedAt: timestamp,
-      };
-      const input = serializeToolPayload(data.input, {
-        toolName: summary.name,
-        direction: 'input',
-      });
-      if (input !== undefined) summary.input = input;
-      tools.set(data.id, summary);
+      const eventTs = eventTimestamp(rec, runStartedAt + rec.id);
+      // Prefer producer-supplied start time (ACP firstSeenAt) over event log ts.
+      const payloadStartedAt =
+        typeof (data as { startedAt?: unknown }).startedAt === 'number' &&
+        Number.isFinite((data as { startedAt: number }).startedAt)
+          ? (data as { startedAt: number }).startedAt
+          : undefined;
+      const timestamp = payloadStartedAt ?? eventTs;
+      const name = typeof data.name === 'string' && data.name ? data.name : 'unknown';
+      const existing = tools.get(data.id);
+      if (existing) {
+        // Second tool_use for the same id: refresh name/input, keep original startedAt.
+        existing.name = name;
+        const input = serializeToolPayload(data.input, {
+          toolName: name,
+          direction: 'input',
+        });
+        if (input !== undefined) existing.input = input;
+        else delete existing.input;
+        // If a later frame carries an earlier startedAt, prefer the earlier one.
+        if (payloadStartedAt !== undefined && payloadStartedAt < existing.startedAt) {
+          existing.startedAt = payloadStartedAt;
+        }
+      } else {
+        const summary: ToolCallSummary = {
+          id: data.id,
+          name,
+          startedAt: timestamp,
+          endedAt: eventTs,
+        };
+        const input = serializeToolPayload(data.input, {
+          toolName: name,
+          direction: 'input',
+        });
+        if (input !== undefined) summary.input = input;
+        tools.set(data.id, summary);
+      }
     } else if (
       data?.type === 'tool_result' &&
       typeof data.toolUseId === 'string'
@@ -516,6 +559,7 @@ function collectAgentEvents(
         typeof data.label === 'string' && data.label.length > 0
           ? data.label
           : 'working';
+      if (label === 'tool_call' || label === 'tool_call_update') continue;
       const index = statusCounts.get(label) ?? 0;
       statusCounts.set(label, index + 1);
       out.push({
@@ -1024,6 +1068,8 @@ export async function reportRunCompletedFromDaemon(
       },
       ...(errorCode ? { errorCode } : {}),
       agentId: run.agentId,
+      cancelOrigin: run.cancelOrigin ?? null,
+      terminalTrigger: run.terminalTrigger ?? null,
       events: run.events,
     });
     const timings = summarizeRunTimingAnalytics({
@@ -1044,6 +1090,9 @@ export async function reportRunCompletedFromDaemon(
       ...getRuntimeInfo(opts.appVersion ?? null),
       ...(run.clientType ? { clientType: run.clientType } : {}),
       ...(getDetectedRuntimeVersions(run.agentId) ?? {}),
+      ...(run.preflightAgentCliVersion
+        ? { agentCliVersion: run.preflightAgentCliVersion }
+        : {}),
     };
     const artifacts = summarizeProducedFiles(traceObjectFilesRaw);
     const diagnostics = summarizeRunDiagnosticsForAnalytics({
@@ -1138,26 +1187,43 @@ export async function reportRunCompletedFromDaemon(
       ...objectManifestOptions,
       uploadMode: 'manifest-only',
     });
+    const finalTelemetryConfig = readRunTelemetrySinkConfig(
+      process.env,
+      configuredAmrEnv,
+    );
+    let uploadedManifests: TraceObjectUploadManifests | undefined;
+    let finalObjectManifests = registrationManifests;
+
     if (registrationManifests) {
-      await reportRunCompleted(
-        buildContext(mergeTraceSafeManifests(manifests, registrationManifests)),
-        {
-          config: objectRegistrationTelemetryConfig(),
-          deliveryPurpose: 'object-registration',
-          ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
-        },
-      );
+      // Authenticated runs register object authority through Vela's signed
+      // service path. Anonymous/direct runs retain the legacy relay boundary.
+      // The authority worker handles registration_only without writing a
+      // content-free Langfuse trace.
+      const registrationTelemetryConfig = finalTelemetryConfig?.kind === 'vela'
+        ? finalTelemetryConfig
+        : objectRegistrationTelemetryConfig();
+      if (registrationTelemetryConfig) {
+        await reportRunCompleted(
+          buildContext(mergeTraceSafeManifests(manifests, registrationManifests)),
+          {
+            config: registrationTelemetryConfig,
+            deliveryPurpose: 'object-registration',
+            ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
+          },
+        );
+        uploadedManifests = await buildTraceObjectManifests(objectManifestOptions);
+        finalObjectManifests = uploadedManifests ?? registrationManifests;
+      }
     }
 
-    const uploadedManifests = await buildTraceObjectManifests(objectManifestOptions);
-    const finalManifests = mergeTraceSafeManifests(manifests, uploadedManifests);
+    const finalManifests = mergeTraceSafeManifests(manifests, finalObjectManifests);
     return await reportRunCompleted(
       buildContext(finalManifests, buildTraceObjectSummary({
         traceObjectFilesRaw,
         ...(uploadedManifests ? { uploaded: uploadedManifests } : {}),
       })),
       {
-        configuredEnv: configuredAmrEnv,
+        config: finalTelemetryConfig,
         ...(opts.fetchImpl ? { fetchImpl: opts.fetchImpl } : {}),
       },
     );

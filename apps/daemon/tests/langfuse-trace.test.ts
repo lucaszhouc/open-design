@@ -4,11 +4,15 @@ import {
   buildFeedbackPayload,
   buildTracePayload,
   deriveLangfuseDeliveryState,
+  isContentToolName,
+  isPartialRedactToolName,
   readLangfuseConfig,
   readRunTelemetrySinkConfig,
   readTelemetrySinkConfig,
   reportRunCompleted,
   reportRunFeedback,
+  shouldFullyRedactToolPayload,
+  toolPayloadRedactionPlaceholder,
   type FeedbackReportContext,
   type LangfuseConfig,
   type ReportContext,
@@ -159,7 +163,7 @@ describe('readLangfuseConfig', () => {
 });
 
 describe('readTelemetrySinkConfig', () => {
-  it('prefers the Open Design telemetry relay when configured', () => {
+  it('prefers the OpenDesign telemetry relay when configured', () => {
     const cfg = readTelemetrySinkConfig({
       OPEN_DESIGN_TELEMETRY_RELAY_URL: 'https://telemetry.open-design.ai/api/langfuse//',
       LANGFUSE_PUBLIC_KEY: 'pk',
@@ -303,6 +307,70 @@ describe('deriveLangfuseDeliveryState', () => {
   });
 });
 
+describe('isContentToolName', () => {
+  it('matches Claude-shaped names case-insensitively', () => {
+    expect(isContentToolName('Read')).toBe(true);
+    expect(isContentToolName('read')).toBe(true);
+    expect(isContentToolName('WRITE')).toBe(true);
+    expect(isContentToolName('write')).toBe(true);
+    expect(isContentToolName('Edit')).toBe(true);
+    expect(isContentToolName('edit')).toBe(true);
+    expect(isContentToolName('grep')).toBe(true);
+    expect(isContentToolName('search')).toBe(true);
+    expect(isContentToolName('fetch')).toBe(true);
+    expect(isContentToolName('think')).toBe(true);
+    expect(isContentToolName('create_file')).toBe(true);
+    expect(isContentToolName('str_replace_edit')).toBe(true);
+  });
+
+  it('does not treat Bash as a content tool', () => {
+    expect(isContentToolName('Bash')).toBe(false);
+    expect(isContentToolName('bash')).toBe(false);
+    expect(isContentToolName('')).toBe(false);
+  });
+});
+
+describe('shouldFullyRedactToolPayload (fail-closed)', () => {
+  it('allows only bash-like execute tools to keep partial redaction', () => {
+    expect(isPartialRedactToolName('Bash')).toBe(true);
+    expect(isPartialRedactToolName('shell')).toBe(true);
+    expect(isPartialRedactToolName('execute')).toBe(true);
+    expect(isPartialRedactToolName('Terminal')).toBe(true);
+    expect(shouldFullyRedactToolPayload('Bash')).toBe(false);
+    expect(shouldFullyRedactToolPayload('shell')).toBe(false);
+  });
+
+  it('fully redacts known content tools and unknown/custom ACP names', () => {
+    expect(shouldFullyRedactToolPayload('Read')).toBe(true);
+    expect(shouldFullyRedactToolPayload('Write')).toBe(true);
+    // kind:other custom / MCP filesystem-style names must not leak raw I/O.
+    expect(shouldFullyRedactToolPayload('mcp__filesystem__read_file')).toBe(true);
+    expect(shouldFullyRedactToolPayload('my_special_tool')).toBe(true);
+    expect(shouldFullyRedactToolPayload('Other')).toBe(true);
+    expect(shouldFullyRedactToolPayload('')).toBe(true);
+    expect(shouldFullyRedactToolPayload('unknown')).toBe(true);
+  });
+
+  it('labels known content tools without embedding untrusted custom names', () => {
+    expect(toolPayloadRedactionPlaceholder('Read', 'output')).toBe(
+      '[REDACTED:tool_output:content_tool:Read]',
+    );
+    // Unknown/custom ACP names must not appear in the placeholder string.
+    expect(toolPayloadRedactionPlaceholder('mcp__filesystem__read_file', 'output')).toBe(
+      '[REDACTED:tool_output:unknown_tool]',
+    );
+    expect(toolPayloadRedactionPlaceholder('  ', 'input')).toBe(
+      '[REDACTED:tool_input:unknown_tool]',
+    );
+    expect(toolPayloadRedactionPlaceholder('/Users/alice/secret-tool', 'output')).toBe(
+      '[REDACTED:tool_output:unknown_tool]',
+    );
+    expect(toolPayloadRedactionPlaceholder('/Users/alice/secret-tool', 'output')).not.toContain(
+      '/Users/alice',
+    );
+  });
+});
+
 describe('buildTracePayload', () => {
   it('emits a trace with nested agent + generation observations', () => {
     const batch = buildTracePayload(makeCtx());
@@ -367,6 +435,83 @@ describe('buildTracePayload', () => {
     expect(tool.output).toBe('total 0');
     expect(write.input).toBe('[REDACTED:tool_input:content_tool:Write]');
     expect(write.output).toBe('[REDACTED:tool_output:content_tool:Write]');
+  });
+
+  it('redacts Linux home paths in Bash tool inputs when content gate is on', () => {
+    const batch = buildTracePayload(
+      makeCtx({
+        prefs: { metrics: true, content: true, artifactManifest: false },
+        tools: [
+          {
+            id: 'bash-linux-1',
+            name: 'Bash',
+            startedAt: 1_700_000_001_000,
+            endedAt: 1_700_000_001_800,
+            input: '{"command":"cat /home/alice/.env"}',
+            output: 'KEY=value',
+          },
+        ],
+      }),
+    );
+    const bash = bodyOf(batch, 'span-create', 'tool:Bash');
+    expect(bash.input).toContain('[REDACTED:local_path]');
+    expect(bash.input).toContain('cat');
+    expect(bash.input).not.toContain('/home/alice');
+    expect(JSON.stringify(batch)).not.toContain('/home/alice/.env');
+  });
+
+  it('fail-closed redacts unknown/custom ACP tool payloads when content gate is on', () => {
+    const batch = buildTracePayload(
+      makeCtx({
+        prefs: { metrics: true, content: true, artifactManifest: false },
+        tools: [
+          {
+            id: 'custom-1',
+            name: 'mcp__filesystem__read_file',
+            startedAt: 1_700_000_001_000,
+            endedAt: 1_700_000_001_800,
+            input: '{"path":"/Users/alice/secrets.env"}',
+            output: 'API_KEY=super-secret\nPASSWORD=also-secret\n',
+          },
+        ],
+      }),
+    );
+    // Custom ACP/MCP names are canonicalized to the allowlisted `other` family
+    // for span labels and metadata — never shipped raw to Langfuse.
+    const custom = bodyOf(batch, 'span-create', 'tool:other');
+    expect(custom.metadata.toolName).toBe('other');
+    expect(custom.input).toBe('[REDACTED:tool_input:unknown_tool]');
+    expect(custom.output).toBe('[REDACTED:tool_output:unknown_tool]');
+    const payload = JSON.stringify(batch);
+    expect(payload).not.toContain('super-secret');
+    expect(payload).not.toContain('also-secret');
+    expect(payload).not.toContain('/Users/alice/secrets.env');
+    expect(payload).not.toContain('mcp__filesystem__read_file');
+  });
+
+  it('does not ship path-like custom tool names when content telemetry is off', () => {
+    const batch = buildTracePayload(
+      makeCtx({
+        prefs: { metrics: true, content: false, artifactManifest: false },
+        tools: [
+          {
+            id: 'path-tool-1',
+            name: '/Users/alice/.ssh/id_rsa',
+            startedAt: 1_700_000_001_000,
+            endedAt: 1_700_000_001_800,
+            input: 'ignored-when-content-off',
+            output: 'ignored-when-content-off',
+          },
+        ],
+      }),
+    );
+    const custom = bodyOf(batch, 'span-create', 'tool:other');
+    expect(custom.metadata.toolName).toBe('other');
+    expect(custom.input).toBeUndefined();
+    expect(custom.output).toBeUndefined();
+    const payload = JSON.stringify(batch);
+    expect(payload).not.toContain('/Users/alice');
+    expect(payload).not.toContain('id_rsa');
   });
 
   it('adds full prompt-stack content once on generation input and flat metadata elsewhere', () => {
@@ -861,6 +1006,44 @@ describe('buildTracePayload', () => {
     });
   });
 
+  it('keeps ACP usage on a failed run for post-run diagnostics', () => {
+    const batch = buildTracePayload(
+      makeCtx({
+        run: {
+          runId: 'run-failed-with-usage',
+          status: 'failed',
+          startedAt: 1_700_000_000_000,
+          endedAt: 1_700_000_004_500,
+          failure: {
+            failure_category: 'timeout',
+            failure_detail: 'timeout',
+            failure_stage: 'first_token_wait',
+            retryable: true,
+            user_action: 'retry',
+          },
+        },
+      }),
+    );
+    const trace = (batch[0] as any).body;
+    const generation = bodyOf(batch, 'generation-create', 'llm');
+
+    expect(trace.metadata.tokens).toMatchObject({
+      input: 1234,
+      output: 567,
+      total: 2051,
+      cacheReadInput: 200,
+      cacheCreationInput: 50,
+    });
+    expect(generation.usage).toMatchObject({
+      input: 1484,
+      output: 567,
+      total: 2051,
+      unit: 'TOKENS',
+    });
+    expect(trace.metadata.failure_category).toBe('timeout');
+    expect(trace.metadata.failure_detail).toBe('timeout');
+  });
+
   it('uses conversationId as sessionId when within length limit', () => {
     const batch = buildTracePayload(makeCtx());
     expect((batch[0] as any).body.sessionId).toBe(
@@ -1173,6 +1356,79 @@ describe('buildTracePayload', () => {
     expect(metadata.time_to_first_token_ms).toBe(40);
     expect(metadata.tool_call_count).toBe(2);
     expect(metadata.total_duration_ms).toBe(100);
+  });
+
+  it('uses the response anchor for model-active on an ACP tool-first run', () => {
+    const batch = buildTracePayload(
+      makeCtx({
+        run: {
+          runId: 'run-model-active-acp',
+          status: 'succeeded',
+          startedAt: 1_700_000_000_000,
+          endedAt: 1_700_000_030_000,
+          timingMarks: {
+            startChatRunStartedAt: 1_700_000_000_100,
+            stdinWriteEndAt: 1_700_000_000_500,
+            // ACP emits the canonical tool_use when the call is terminal, so
+            // the event arrived at 20s while the tool began at 4s. A tool-only
+            // turn never produces a text token at all.
+            firstModelResponseAt: 1_700_000_004_000,
+            firstModelEventAt: 1_700_000_020_000,
+            finalizeStartAt: 1_700_000_029_000,
+          },
+        },
+      }),
+    );
+
+    const generation = bodyOf(batch, 'generation-create', 'llm');
+    const measured =
+      generation.metadata.performance_diagnostics.semantic_phases.measured;
+
+    // `model_active_duration_ms` anchors on the earliest of the three marks,
+    // which is the response at 4s. Ignoring it here reports 10s against the
+    // analytics value of 26s for the same run -- on the exact runtime shape
+    // this change targets.
+    expect(measured['model-active']).toMatchObject({
+      duration_ms: 26_000,
+      status: 'measured',
+    });
+  });
+
+  it('measures model-active on the same boundaries as the analytics metric', () => {
+    const batch = buildTracePayload(
+      makeCtx({
+        run: {
+          runId: 'run-model-active',
+          status: 'succeeded',
+          startedAt: 1_700_000_000_000,
+          endedAt: 1_700_000_010_000,
+          timingMarks: {
+            startChatRunStartedAt: 1_700_000_000_100,
+            processSpawnedAt: 1_700_000_000_300,
+            stdinWriteEndAt: 1_700_000_000_500,
+            // Text-first: the server stamps first-token before the send() path
+            // records the model-event mark, so the two are not equal and the
+            // earlier one is the true start of the response.
+            firstTokenAt: 1_700_000_001_000,
+            firstModelEventAt: 1_700_000_001_200,
+            finalizeStartAt: 1_700_000_009_000,
+          },
+        },
+      }),
+    );
+
+    const generation = bodyOf(batch, 'generation-create', 'llm');
+    const measured =
+      generation.metadata.performance_diagnostics.semantic_phases.measured;
+
+    // `model_active_duration_ms` takes the earliest of the two marks and runs
+    // to run end. This entry exists to be compared against that number, so a
+    // different window here makes PostHog and Langfuse disagree on the same
+    // run.
+    expect(measured['model-active']).toMatchObject({
+      duration_ms: 9_000,
+      status: 'measured',
+    });
   });
 
   it('adds duration spans for run timing marks', () => {
@@ -1808,6 +2064,76 @@ describe('reportRunCompleted', () => {
     expect(result.langfuse_delivery_status).toBe('accepted');
   });
 
+  it.each([401, 403])(
+    'fails object registration closed when Vela rejects auth with %i',
+    async (status) => {
+      vi.stubEnv(
+        'OPEN_DESIGN_TELEMETRY_RELAY_URL',
+        'https://telemetry.open-design.ai/api/langfuse',
+      );
+      const fetchSpy = vi.fn().mockResolvedValue(new Response('', { status }));
+
+      const result = await reportRunCompleted(
+        makeCtx({
+          prefs: { metrics: true, content: true, artifactManifest: true },
+        }),
+        {
+          config: {
+            kind: 'vela',
+            apiUrl: 'https://vela.example.test',
+            controlKey: 'ck_expired',
+            timeoutMs: 1_000,
+            retries: 0,
+          },
+          deliveryPurpose: 'object-registration',
+          fetchImpl: fetchSpy as any,
+        },
+      );
+
+      expect(fetchSpy.mock.calls.map((call) => call[0])).toEqual([
+        'https://vela.example.test/api/v1/open-design/telemetry',
+      ]);
+      expect(result).toEqual({
+        langfuse_expected: true,
+        langfuse_delivery_status: 'failed',
+        langfuse_drop_reason: `vela_${status}`,
+      });
+    },
+  );
+
+  it('fails object registration closed when the Vela installation identity is missing', async () => {
+    vi.stubEnv(
+      'OPEN_DESIGN_TELEMETRY_RELAY_URL',
+      'https://telemetry.open-design.ai/api/langfuse',
+    );
+    const fetchSpy = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+
+    const result = await reportRunCompleted(
+      makeCtx({
+        installationId: null,
+        prefs: { metrics: true, content: true, artifactManifest: true },
+      }),
+      {
+        config: {
+          kind: 'vela',
+          apiUrl: 'https://vela.example.test',
+          controlKey: 'ck_secret',
+          timeoutMs: 1_000,
+          retries: 0,
+        },
+        deliveryPurpose: 'object-registration',
+        fetchImpl: fetchSpy as any,
+      },
+    );
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      langfuse_expected: true,
+      langfuse_delivery_status: 'failed',
+      langfuse_drop_reason: 'missing_sink_config',
+    });
+  });
+
   it('does not anonymously overwrite a throttled Vela delivery', async () => {
     vi.stubEnv(
       'OPEN_DESIGN_TELEMETRY_RELAY_URL',
@@ -2000,7 +2326,7 @@ describe('reportRunCompleted', () => {
     expect(JSON.stringify(batch)).not.toContain('sk-raw');
   });
 
-  it('POSTs serialized ingestion batches to the Open Design telemetry relay', async () => {
+  it('POSTs serialized ingestion batches to the OpenDesign telemetry relay', async () => {
     const relayConfig: TelemetrySinkConfig = {
       kind: 'relay',
       relayUrl: 'https://telemetry.open-design.ai/api/langfuse',
@@ -2431,6 +2757,10 @@ describe('reportRunFeedback', () => {
   });
 
   it('posts feedback scores to Vela when completed-run telemetry uses Vela', async () => {
+    // tests/setup.ts defaults OPEN_DESIGN_VELA_TELEMETRY to 'off' so unit
+    // tests never route through a developer's real Vela profile; this test
+    // exercises exactly that sink, so opt back in explicitly.
+    vi.stubEnv('OPEN_DESIGN_VELA_TELEMETRY', 'on');
     vi.stubEnv('VELA_CONTROL_KEY', 'ck_secret');
     vi.stubEnv('VELA_API_URL', 'https://vela.example.test');
     vi.stubEnv(
@@ -2479,6 +2809,8 @@ describe('reportRunFeedback', () => {
   });
 
   it('does not fall back anonymously when Vela rejects feedback auth', async () => {
+    // Same opt-in as above: the setup default keeps the Vela sink off.
+    vi.stubEnv('OPEN_DESIGN_VELA_TELEMETRY', 'on');
     vi.stubEnv('VELA_CONTROL_KEY', 'ck_expired');
     vi.stubEnv('VELA_API_URL', 'https://vela.example.test');
     vi.stubEnv(

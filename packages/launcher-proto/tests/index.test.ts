@@ -6,9 +6,11 @@ import {
   LAUNCHER_SCHEMA_VERSION,
   LauncherProtocolError,
   buildLauncherAfterQuitArgs,
+  buildLauncherDelegatedArgs,
   buildLauncherHandoffResumeArgs,
   compareLauncherVersions,
   parseLauncherAfterQuitArgs,
+  parseLauncherDelegatedArgs,
   parseLauncherHandoffResumeArgs,
   resolveLauncherPaths,
   resolveLauncherVersionPaths,
@@ -36,10 +38,10 @@ describe("launcher protocol paths", () => {
     expect(paths.releasesRoot).toBe(join(paths.namespaceRoot, "updates", "releases"));
   });
 
-  it("resolves the self-hosted betas launcher channel", () => {
-    const paths = resolveLauncherPaths({ channel: "betas", namespace: "release-betas-win", root });
+  it("resolves a data-defined exact launcher channel", () => {
+    const paths = resolveLauncherPaths({ channel: "canary", namespace: "release-canary-win", root });
 
-    expect(paths.namespaceRoot).toBe(join(root, "launcher", "channels", "betas", "namespaces", "release-betas-win"));
+    expect(paths.namespaceRoot).toBe(join(root, "launcher", "channels", "canary", "namespaces", "release-canary-win"));
     expect(paths.runtimePath).toBe(join(paths.namespaceRoot, "runtime.json"));
   });
 
@@ -58,7 +60,7 @@ describe("launcher protocol paths", () => {
 
   it("rejects unsafe roots, namespaces, channels, and version path segments", () => {
     expect(() => resolveLauncherPaths({ channel: "beta", namespace: "../escape", root })).toThrow(LauncherProtocolError);
-    expect(() => resolveLauncherPaths({ channel: "canary", namespace: "release-beta", root })).toThrow(LauncherProtocolError);
+    expect(() => resolveLauncherPaths({ channel: "local", namespace: "release-local", root })).toThrow(LauncherProtocolError);
     expect(() => resolveLauncherPaths({ channel: "beta", namespace: "release-beta", root: "relative" })).toThrow(LauncherProtocolError);
     expect(() => resolveLauncherVersionPaths({ channel: "beta", namespace: "release-beta", root, version: "../0.8.1" })).toThrow(LauncherProtocolError);
     expect(() => resolveLauncherVersionPaths({ channel: "beta", namespace: "release-beta", root, version: "0.8..1" })).toThrow(LauncherProtocolError);
@@ -155,6 +157,68 @@ describe("launcher runtime descriptors", () => {
       reason: "active-resume",
       selected: true,
     });
+  });
+
+  it("treats a delegated pre-armed attempt as the launch in progress, not a failed launch", () => {
+    // The delegating parent (outer or updater relaunch) arms attempt.json
+    // BEFORE spawning the payload so a payload that dies before reaching its
+    // own bookkeeping still leaves rollback evidence. The spawned payload
+    // carries the delegated pointer and must not mistake that fresh attempt
+    // for a previous failed launch.
+    const attempted = {
+      channel: "beta",
+      generation: 2,
+      namespace: "release-beta",
+      schemaVersion: LAUNCHER_SCHEMA_VERSION,
+      version: "0.8.1-beta.2",
+    } as const;
+
+    expect(
+      selectLauncherRuntimeTarget({
+        attempted,
+        delegated: { generation: 2, version: "0.8.1-beta.2" },
+        runtime,
+      }),
+    ).toEqual({
+      pointer: { generation: 2, version: "0.8.1-beta.2" },
+      reason: "active-delegated",
+      selected: true,
+    });
+
+    // A stale delegated pointer from an older generation must not defeat the
+    // rollback: only an exact active match is the launch in progress.
+    expect(
+      selectLauncherRuntimeTarget({
+        attempted,
+        delegated: { generation: 1, version: "0.8.1-beta.1" },
+        runtime,
+      }),
+    ).toEqual({
+      pointer: { generation: 1, version: "0.8.1-beta.1" },
+      reason: "last-successful",
+      selected: true,
+    });
+
+    // Without a matching attempt the delegated pointer is irrelevant.
+    expect(
+      selectLauncherRuntimeTarget({
+        delegated: { generation: 2, version: "0.8.1-beta.2" },
+        runtime,
+      }),
+    ).toEqual({
+      pointer: { generation: 2, version: "0.8.1-beta.2" },
+      reason: "active",
+      selected: true,
+    });
+  });
+
+  it("round-trips launcher delegated argv", () => {
+    const args = buildLauncherDelegatedArgs({ generation: 2, version: "0.8.1-beta.2" });
+    expect(parseLauncherDelegatedArgs(["node", "app", ...args])).toEqual({
+      generation: 2,
+      version: "0.8.1-beta.2",
+    });
+    expect(parseLauncherDelegatedArgs(["node", "app"])).toBeNull();
   });
 
   it("falls back cleanly when no active runtime target exists", () => {

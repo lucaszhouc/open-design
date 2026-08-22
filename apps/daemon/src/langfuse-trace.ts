@@ -2,7 +2,7 @@
 //
 // This module is intentionally dependency-free (no `langfuse` SDK). It builds
 // Langfuse ingestion batches for completed runs and sends them either to the
-// official Open Design telemetry relay or, for local smoke tests, directly to
+// official OpenDesign telemetry relay or, for local smoke tests, directly to
 // Langfuse. Without OPEN_DESIGN_TELEMETRY_RELAY_URL or LANGFUSE_PUBLIC_KEY /
 // LANGFUSE_SECRET_KEY in the env, every entry point becomes a no-op so that
 // dev runs and forks of this open-source repo do not accidentally report.
@@ -28,9 +28,11 @@ import {
   type PromptTelemetrySection,
   type PromptStackTelemetry,
 } from './prompt-telemetry.js';
-import type {
-  RunTelemetryTimestamps,
-  RunTimingAnalytics,
+import {
+  canonicalizeToolAnalyticsName,
+  type RunTelemetryTimestamps,
+  phaseAnchorFromMarks,
+  type RunTimingAnalytics,
 } from './run-analytics-observability.js';
 import type { RunFailureClassification } from './run-failure-classification.js';
 import { redactSecrets } from './redact.js';
@@ -151,6 +153,7 @@ export interface MessageSummary {
     inputTokensEffective?: number;
     outputTokens?: number;
     totalTokens?: number;
+    thoughtTokens?: number;
     cacheReadInputTokens?: number;
     cacheCreationInputTokens?: number;
     uncachedInputTokens?: number;
@@ -276,7 +279,7 @@ export interface RuntimeInfo {
   osRelease?: string;
   /** CPU architecture (`os.arch()`, e.g. 'arm64' | 'x64'). */
   arch?: string;
-  /** Open Design app version reported by the daemon. */
+  /** OpenDesign app version reported by the daemon. */
   appVersion?: string;
   /** Build channel (development / prerelease / beta / stable). */
   appChannel?: string;
@@ -345,7 +348,7 @@ export interface ReportRunOpts {
   fetchImpl?: typeof fetch;
   /** App-config AMR env used only when resolving the completed-run Vela sink. */
   configuredEnv?: Record<string, string>;
-  /** Keep object-authority registration anonymous and content-free. */
+  /** Emit only the content-free object-authority trace projection. */
   deliveryPurpose?: 'final' | 'object-registration';
 }
 
@@ -655,6 +658,7 @@ function tokenUsageSummary(
     input_effective: usage.inputTokensEffective,
     output: usage.outputTokens,
     total: usage.totalTokens,
+    thought: usage.thoughtTokens,
     cache_read_input: usage.cacheReadInputTokens,
     cache_creation_input: usage.cacheCreationInputTokens,
     uncached_input: usage.uncachedInputTokens,
@@ -903,10 +907,12 @@ function buildToolPerformanceDiagnostics(
 
   for (const tool of list) {
     const d = durationMs(tool.startedAt, tool.endedAt);
+    // Aggregate under allowlisted family names only — never raw ACP/MCP labels.
+    const safeName = telemetrySafeToolName(tool.name);
     const current =
-      byName.get(tool.name) ??
+      byName.get(safeName) ??
       {
-        tool_name: tool.name,
+        tool_name: safeName,
         call_count: 0,
         error_count: 0,
         total_duration_ms: 0,
@@ -922,7 +928,7 @@ function buildToolPerformanceDiagnostics(
       current.error_count += 1;
       current.failure_types.add('tool_result_error');
     }
-    byName.set(tool.name, current);
+    byName.set(safeName, current);
   }
 
   return {
@@ -1016,6 +1022,17 @@ function buildSemanticPhaseDiagnostics(ctx: ReportContext): Record<string, unkno
   addMeasured('runtime-init-to-first-token', marks.stdinWriteEndAt ?? marks.modelCallStartAt ?? marks.processSpawnedAt, marks.firstTokenAt);
   addMeasured('agent-call', marks.modelCallStartAt, ctx.run.endedAt);
   addMeasured('stream-output', marks.firstTokenAt, marks.finalizeStartAt ?? ctx.run.endedAt);
+  // `stream-output` starts at the first text token, so a tool-first run shows
+  // only its closing message here. `model-active` is the same window anchored
+  // on the first model event of any kind. Kept as a diagnostics entry rather
+  // than a second span: this map rides along in existing metadata, while a new
+  // span would add an observation row per run.
+  //
+  // Boundaries mirror `model_active_duration_ms` in run-analytics-observability
+  // exactly -- earliest of the two marks, through run end -- because the whole
+  // point of this entry is to be compared against that number. Deliberately
+  // unlike its neighbours above, which end at `finalizeStartAt`.
+  addMeasured('model-active', phaseAnchorFromMarks(marks), ctx.run.endedAt);
   addMeasured('artifact-write', marks.firstArtifactWriteAt, marks.finalizeStartAt ?? ctx.run.endedAt);
   addMeasured('finalize', marks.finalizeStartAt, ctx.run.endedAt);
   return {
@@ -1295,6 +1312,7 @@ function usageTotal(usage: MessageSummary['usage']): number {
     usage.inputTokensEffective,
     usage.outputTokens,
     usage.totalTokens,
+    usage.thoughtTokens,
     usage.cacheReadInputTokens,
     usage.cacheCreationInputTokens,
     usage.uncachedInputTokens,
@@ -1316,19 +1334,128 @@ function redactArtifactBlocks(value: string | undefined): string | undefined {
   );
 }
 
-const CONTENT_TOOL_NAMES = new Set([
+/**
+ * Tool names known to be content-bearing (read/write/search/think tools,
+ * including ACP aliases). Used for redaction reason labels and docs.
+ *
+ * Full redaction policy is fail-closed via `shouldFullyRedactToolPayload`:
+ * only bash-like execute tools keep secret+path lexical masking; known
+ * content tools AND any unknown/custom ACP tool name (e.g. kind:other MCP
+ * filesystem readers) fully redact so private file bodies cannot leak to
+ * Langfuse under best-effort masking alone.
+ *
+ * Matching is case-insensitive. Canonical Claude-shaped names are listed
+ * here; lowercase ACP kind tokens (read/write/edit/…) are covered via the
+ * lowercased lookup set built below.
+ */
+export const CONTENT_TOOL_NAMES: ReadonlySet<string> = new Set([
   'Read',
   'Write',
   'Edit',
   'MultiEdit',
   'NotebookEdit',
+  'create_file',
+  'str_replace_edit',
+  'multi_edit',
+  'Grep',
+  'Search',
+  'Glob',
+  'Fetch',
+  'Think',
+  'Thinking',
+  // Common lowercase ACP kind / title tokens (also matched case-insensitively).
+  'read',
+  'write',
+  'edit',
+  'grep',
+  'search',
+  'fetch',
+  'think',
+  'glob',
 ]);
+
+const CONTENT_TOOL_NAMES_LOWER: ReadonlySet<string> = new Set(
+  [...CONTENT_TOOL_NAMES].map((name) => name.toLowerCase()),
+);
+
+/**
+ * Execute-family tools allowed to keep secret+path-only redaction (not full
+ * payload replacement). Everything else fails closed to a placeholder.
+ */
+const PARTIAL_REDACT_TOOL_NAMES_LOWER: ReadonlySet<string> = new Set([
+  'bash',
+  'shell',
+  'execute',
+  'terminal',
+]);
+
+/** True when the tool is a known content-bearing family name. */
+export function isContentToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  if (!normalized) return false;
+  return CONTENT_TOOL_NAMES_LOWER.has(normalized);
+}
+
+/**
+ * True when tool I/O may keep lexical (secret+path) redaction for telemetry.
+ * Only bash-like execute tools qualify; empty/unknown/custom names do not.
+ */
+export function isPartialRedactToolName(toolName: string): boolean {
+  const normalized = toolName.trim().toLowerCase();
+  if (!normalized) return false;
+  return PARTIAL_REDACT_TOOL_NAMES_LOWER.has(normalized);
+}
+
+/**
+ * Fail-closed telemetry gate: fully redact tool input/output unless the tool
+ * is an allowlisted bash-like execute family. Unknown/custom ACP names
+ * (kind:other, MCP tools, etc.) must not ship raw payloads to Langfuse.
+ */
+export function shouldFullyRedactToolPayload(toolName: string): boolean {
+  return !isPartialRedactToolName(toolName);
+}
+
+/**
+ * Map an arbitrary tool name to a Langfuse-safe label (bounded family allowlist).
+ * Custom ACP/MCP names, paths, and free text never leave the host as span names
+ * or toolName metadata — even when content telemetry is off.
+ */
+export function telemetrySafeToolName(toolName: string): string {
+  return canonicalizeToolAnalyticsName(toolName);
+}
+
+/**
+ * Builds the fixed placeholder used when tool I/O is fully redacted for
+ * content telemetry. Known content families keep `content_tool` plus a
+ * allowlisted family label; everything else uses `unknown_tool` without
+ * embedding the untrusted custom name (paths/tokens/MCP ids must not leak).
+ */
+export function toolPayloadRedactionPlaceholder(
+  toolName: string,
+  direction: 'input' | 'output',
+): string {
+  const label = toolName.trim() || 'unnamed';
+  if (isContentToolName(label)) {
+    // Stable allowlisted family only — never the raw adapter string.
+    return `[REDACTED:tool_${direction}:content_tool:${telemetrySafeToolName(label)}]`;
+  }
+  return `[REDACTED:tool_${direction}:unknown_tool]`;
+}
 
 function redactLocalPaths(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
+  // macOS /Users, Linux /home + /root, Windows C:\Users — Linux is a primary
+  // supported environment, so Bash inputs like `cat /home/alice/.env` must not
+  // leak home directories into Langfuse tool spans.
   return value
-    .replace(/\/Users\/[^/\s"']+(?:\/[^ \n\r\t"'`<>)]*)?/g, '[REDACTED:local_path]')
-    .replace(/[A-Za-z]:\\Users\\[^\\\s"']+(?:\\[^ \n\r\t"'`<>)]*)?/g, '[REDACTED:local_path]');
+    .replace(
+      /\/(?:Users|home|root)\/[^/\s"']+(?:\/[^ \n\r\t"'`<>)]*)?/g,
+      '[REDACTED:local_path]',
+    )
+    .replace(
+      /[A-Za-z]:\\Users\\[^\\\s"']+(?:\\[^ \n\r\t"'`<>)]*)?/g,
+      '[REDACTED:local_path]',
+    );
 }
 
 function traceSafeToolPayload(
@@ -1337,8 +1464,8 @@ function traceSafeToolPayload(
   value: string | undefined,
 ): string | undefined {
   if (value === undefined) return undefined;
-  if (CONTENT_TOOL_NAMES.has(toolName)) {
-    return `[REDACTED:tool_${direction}:content_tool:${toolName}]`;
+  if (shouldFullyRedactToolPayload(toolName)) {
+    return toolPayloadRedactionPlaceholder(toolName, direction);
   }
   return redactLocalPaths(redactArtifactBlocks(value));
 }
@@ -1403,6 +1530,7 @@ export function buildTracePayload(ctx: ReportContext): unknown[] {
         inputEffective: ctx.message.usage.inputTokensEffective,
         output: ctx.message.usage.outputTokens,
         total: ctx.message.usage.totalTokens,
+        thought: ctx.message.usage.thoughtTokens,
         cacheReadInput: ctx.message.usage.cacheReadInputTokens,
         cacheCreationInput: ctx.message.usage.cacheCreationInputTokens,
         uncachedInput: ctx.message.usage.uncachedInputTokens,
@@ -1697,6 +1825,9 @@ export function buildTracePayload(ctx: ReportContext): unknown[] {
       const toolStartedAt = new Date(tool.startedAt).toISOString();
       const toolEndedAt = new Date(tool.endedAt).toISOString();
       const toolDurationMs = durationMs(tool.startedAt, tool.endedAt);
+      // Redaction policy still keys off the producer name (Bash vs content vs
+      // unknown); only the labels we emit to Langfuse are allowlisted.
+      const safeToolName = telemetrySafeToolName(tool.name);
       const toolInput = wantsContent
         ? truncate(
             traceSafeToolPayload(tool.name, 'input', tool.input),
@@ -1717,7 +1848,7 @@ export function buildTracePayload(ctx: ReportContext): unknown[] {
           id: toolSpanId,
           traceId,
           parentObservationId: toolParentObservationId,
-          name: `tool:${tool.name}`,
+          name: `tool:${safeToolName}`,
           startTime: toolStartedAt,
           endTime: toolEndedAt,
           input: toolInput,
@@ -1725,7 +1856,7 @@ export function buildTracePayload(ctx: ReportContext): unknown[] {
           level: tool.isError ? 'ERROR' : 'DEFAULT',
           metadata: {
             toolCallId: tool.id,
-            toolName: tool.name,
+            toolName: safeToolName,
             durationMs: toolDurationMs,
             hasInput: tool.input !== undefined,
             hasOutput: tool.output !== undefined,
@@ -1990,12 +2121,12 @@ function asVelaSourceEvents(batch: unknown[]): VelaSourceEvent[] {
 }
 
 function stableVelaEventId(event: VelaSourceEvent): string {
-  const bodyId =
-    typeof event.body.id === 'string' && event.body.id.trim()
-      ? event.body.id.trim()
-      : JSON.stringify(event.body);
+  // Retries and deterministic rebuilds of the same event keep one id, while
+  // a later upsert of the same trace/observation with richer data gets a new
+  // ingestion id and cannot be mistaken for the earlier registration event.
+  const canonicalBody = JSON.stringify(event.body);
   return `od-${createHash('sha256')
-    .update(`${event.type}\n${bodyId}`, 'utf8')
+    .update(`${event.type}\n${canonicalBody}`, 'utf8')
     .digest('hex')}`;
 }
 
@@ -2324,6 +2455,13 @@ export async function reportRunCompleted(
   if (config.kind === 'vela') {
     const installationId = ctx.installationId?.trim() ?? '';
     if (!installationId) {
+      if (opts.deliveryPurpose === 'object-registration') {
+        return {
+          langfuse_expected: true,
+          langfuse_delivery_status: 'failed',
+          langfuse_drop_reason: 'missing_sink_config',
+        };
+      }
       const fallback = readTelemetrySinkConfig();
       if (!fallback) {
         return {
@@ -2336,7 +2474,9 @@ export async function reportRunCompleted(
         ? postRelayBatch(fallback, serialized, fetchImpl)
         : postLangfuseBatch(fallback, batch, fetchImpl);
     }
-    return postVelaBatch(config, batch, installationId, fetchImpl);
+    return postVelaBatch(config, batch, installationId, fetchImpl, {
+      allowAnonymousAuthFallback: opts.deliveryPurpose !== 'object-registration',
+    });
   }
   if (config.kind === 'relay') {
     return postRelayBatch(config, serialized, fetchImpl);
