@@ -22,11 +22,17 @@ import { delimiter, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { startServer } from '../src/server.js';
+import { ensureWorkspaceProject, openDatabase } from '../src/db.js';
 import { readMemoryConfig, writeMemoryConfig } from '../src/memory.js';
 
 type StartedServer = { url: string; server: http.Server };
 
-type RunStatus = { id: string; status: string; error?: string | null; errorCode?: string | null };
+type RunStatus = {
+  id: string;
+  status: string;
+  error?: string | null;
+  errorCode?: string | null;
+};
 
 describe('conversation compact route', () => {
   let server: http.Server;
@@ -99,6 +105,89 @@ describe('conversation compact route', () => {
     expect(response.status).toBe(404);
   });
 
+  it('requires the exact Team Workspace writer and pins that scope on the compact run', async () => {
+    const { binDir } = await writeFakeCompactClaude();
+    process.env.PATH = `${binDir}${delimiter}${originalPath ?? ''}`;
+    try {
+      const { projectId, conversationId } = await createProjectWithConversation(
+        baseUrl,
+        'team-authority',
+      );
+      // Seed a genuine resumable session before binding the project. This
+      // keeps the authority assertions focused on the compact mutation gate
+      // while preserving the runtime's model/cwd/message-cursor invariants.
+      const seedResponse = await fetch(`${baseUrl}/api/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          conversationId,
+          assistantMessageId: `assistant_compact_team_${randomUUID()}`,
+          agentId: 'claude',
+          message: 'please reply ok',
+          currentPrompt: 'please reply ok',
+        }),
+      });
+      expect(seedResponse.status).toBe(202);
+      const seededRun = (await seedResponse.json()) as { runId: string };
+      const seededStatus = await waitForRun(baseUrl, seededRun.runId);
+      expect(seededStatus.status, JSON.stringify(seededStatus)).toBe('succeeded');
+
+      const db = openDatabase(process.cwd(), { dataDir: process.env.OD_DATA_DIR! });
+      ensureWorkspaceProject(db, {
+        projectId,
+        workspaceId: 'workspace-compact-team',
+        visibility: 'team',
+        resourceState: 'active',
+        createdByWorkspaceMemberId: 'member-compact-owner',
+      });
+
+      const headerless = await postCompact(baseUrl, projectId, conversationId, {
+        agentId: 'claude',
+      });
+      expect(headerless.status).toBe(400);
+      expect(await headerless.json()).toMatchObject({
+        error: { code: 'WORKSPACE_CONTEXT_REQUIRED' },
+      });
+
+      const wrongWriter = await postCompact(
+        baseUrl,
+        projectId,
+        conversationId,
+        { agentId: 'claude' },
+        workspaceHeaders('workspace-compact-team', 'member-compact-other'),
+      );
+      expect(wrongWriter.status).toBe(403);
+      expect(await wrongWriter.json()).toMatchObject({
+        error: { code: 'WORKSPACE_PROJECT_PERMISSION_DENIED' },
+      });
+
+      const authorized = await postCompact(
+        baseUrl,
+        projectId,
+        conversationId,
+        { agentId: 'claude' },
+        workspaceHeaders('workspace-compact-team', 'member-compact-owner'),
+      );
+      expect(authorized.status).toBe(202);
+      const body = (await authorized.json()) as { runId: string; conversationId: string };
+      expect(body.conversationId).toBe(conversationId);
+      const status = await waitForRun(baseUrl, body.runId);
+      expect(status.status, JSON.stringify(status)).toBe('succeeded');
+      const durableState = JSON.parse(await fsp.readFile(
+        join(process.env.OD_DATA_DIR!, 'runs', body.runId, 'state.json'),
+        'utf8',
+      )) as { workspaceScope?: Record<string, unknown> | null };
+      expect(durableState.workspaceScope).toMatchObject({
+        workspaceId: 'workspace-compact-team',
+        projectId,
+      });
+    } finally {
+      if (originalPath == null) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
+  });
+
   it('resumes the stored session and delivers the bare compact command', async () => {
     const { binDir, argsLogPath, stdinLogPath } = await writeFakeCompactClaude();
     process.env.PATH = `${binDir}${delimiter}${originalPath ?? ''}`;
@@ -123,7 +212,7 @@ describe('conversation compact route', () => {
       expect(runResponse.status).toBe(202);
       const firstRun = (await runResponse.json()) as { runId: string };
       const firstStatus = await waitForRun(baseUrl, firstRun.runId);
-      expect(firstStatus.status).toBe('succeeded');
+      expect(firstStatus.status, JSON.stringify(firstStatus)).toBe('succeeded');
 
       // Turn 2: manual compact.
       const compactResponse = await postCompact(baseUrl, projectId, conversationId, {
@@ -276,15 +365,23 @@ async function postCompact(
   projectId: string,
   conversationId: string,
   body: Record<string, unknown>,
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   return fetch(
     `${url}/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/compact`,
     {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),
     },
   );
+}
+
+function workspaceHeaders(workspaceId: string, workspaceMemberId: string) {
+  return {
+    'x-od-workspace-id': workspaceId,
+    'x-od-workspace-member-id': workspaceMemberId,
+  };
 }
 
 async function waitForRun(url: string, runId: string): Promise<RunStatus> {

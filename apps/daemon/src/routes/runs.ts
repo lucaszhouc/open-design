@@ -11,6 +11,8 @@ import {
   type ByokChatProviderConfig,
   type ChatRunStatus,
   type ChatRunStatusResponse,
+  type CompactConversationRequest,
+  type CompactConversationResponse,
   type ProjectMetadata as ContractProjectMetadata,
   type RunResultPackageResponse,
 } from '@open-design/contracts';
@@ -1239,7 +1241,13 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       if (!conversation || conversation.projectId !== projectId) {
         return sendApiError(res, 404, 'CONVERSATION_NOT_FOUND', 'conversation not found for project');
       }
-      const body = toJsonRecord(req.body);
+      const authorization = await authorizeRunProjectBeforePluginResolution(
+        req,
+        res,
+        projectId,
+      );
+      if (!authorization.ok) return;
+      const body = toJsonRecord(req.body) as CompactConversationRequest;
       let agentId = typeof body.agentId === 'string' && body.agentId ? body.agentId : null;
       if (!agentId) {
         const appCfg = await readAppConfig(RUNTIME_DATA_DIR).catch(
@@ -1250,6 +1258,14 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
       if (!agentId) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'agentId required');
       }
+      const preparedWorkspaceScope = await prepareRunWorkspaceScope(
+        req,
+        res,
+        projectId,
+        agentId,
+        authorization.authorizedBoundMutation,
+      );
+      if (!preparedWorkspaceScope.ok) return;
       const def = getAgentDef(agentId);
       if (!def) {
         return sendApiError(res, 400, 'AGENT_UNAVAILABLE', `unknown agent: ${agentId}`);
@@ -1280,6 +1296,7 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         model: typeof body.model === 'string' && body.model ? body.model : null,
         sessionMode: normalizeConversationSessionMode(conversation.sessionMode),
         manualCompact: true,
+        workspaceScope: preparedWorkspaceScope.workspaceScope,
       };
       if (project.metadata) {
         meta.projectMetadata = project.metadata;
@@ -1297,11 +1314,12 @@ export function registerRunRoutes(app: Express, ctx: RegisterRunRoutesDeps) {
         const ua = String(req.get('user-agent') ?? '');
         run.clientType = ua.includes('Electron/') ? 'desktop' : 'web';
       }
-      res.status(202).json({
+      const response: CompactConversationResponse = {
         runId: run.id,
         conversationId,
         assistantMessageId: run.assistantMessageId ?? null,
-      });
+      };
+      res.status(202).json(response);
       reconcileAssistantMessageOnRunEnd(db, design.runs, run);
       design.runs.start(run, () => startChatRun(meta, run));
     },

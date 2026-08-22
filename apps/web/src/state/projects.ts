@@ -15,6 +15,8 @@ import type {
   ApplyResult,
   ChatSessionMode,
   CollabProjectBootstrapResponse,
+  CompactConversationRequest,
+  CompactConversationResponse,
   CreateConversationRequest,
   CreateDesignSystemProjectFromProjectResponse,
   DuplicateProjectResponse,
@@ -1345,7 +1347,7 @@ export async function deleteConversation(
 }
 
 export type CompactConversationResult =
-  | { ok: true; runId: string; assistantMessageId: string | null }
+  | ({ ok: true } & CompactConversationResponse)
   | { ok: false; code: string };
 
 /**
@@ -1359,14 +1361,18 @@ export type CompactConversationResult =
 export async function compactConversationContext(
   projectId: string,
   conversationId: string,
-  input: { agentId: string; model?: string | null },
+  input: CompactConversationRequest,
+  workspaceContext?: WorkspaceCollabContext | null,
 ): Promise<CompactConversationResult> {
   try {
     const resp = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/compact`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(workspaceContext ? workspaceProjectHeaders(workspaceContext) : {}),
+        },
         body: JSON.stringify(input),
       },
     );
@@ -1376,13 +1382,11 @@ export async function compactConversationContext(
         | null;
       return { ok: false, code: body?.error?.code ?? `HTTP_${resp.status}` };
     }
-    const json = (await resp.json()) as {
-      runId: string;
-      assistantMessageId?: string | null;
-    };
+    const json = (await resp.json()) as CompactConversationResponse;
     return {
       ok: true,
       runId: json.runId,
+      conversationId: json.conversationId,
       assistantMessageId: json.assistantMessageId ?? null,
     };
   } catch {

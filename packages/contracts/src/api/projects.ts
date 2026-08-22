@@ -637,6 +637,17 @@ export interface ConversationResponse {
   conversation: Conversation;
 }
 
+export interface CompactConversationRequest {
+  agentId?: string;
+  model?: string | null;
+}
+
+export interface CompactConversationResponse {
+  runId: string;
+  conversationId: string;
+  assistantMessageId: string | null;
+}
+
 export interface CreateConversationRequest {
   title?: string | null;
   sessionMode?: ChatSessionMode;

@@ -9351,14 +9351,19 @@ export function ProjectView({
       agentsById.get(config.agentId),
       config.agentModels?.[config.agentId],
     );
-    const result = await compactConversationContext(project.id, activeConversationId, {
-      agentId: config.agentId,
-      // Send the SAME model the composer would use for a normal turn: the
-      // daemon's resume identity guard refuses a session built under a
-      // different model, which is the correct outcome (that session would
-      // be reseeded on the next turn anyway, so compacting it is wasted).
-      model: choice?.model ?? null,
-    });
+    const result = await compactConversationContext(
+      project.id,
+      activeConversationId,
+      {
+        agentId: config.agentId,
+        // Send the SAME model the composer would use for a normal turn: the
+        // daemon's resume identity guard refuses a session built under a
+        // different model, which is the correct outcome (that session would
+        // be reseeded on the next turn anyway, so compacting it is wasted).
+        model: choice?.model ?? null,
+      },
+      projectRunWorkspaceContext,
+    );
     if (!result.ok) {
       setProjectActionsToast({
         message:
@@ -9406,6 +9411,7 @@ export function ProjectView({
     activeConversationId,
     currentConversationHasActiveRun,
     project.id,
+    projectRunWorkspaceContext,
     t,
   ]);
 
