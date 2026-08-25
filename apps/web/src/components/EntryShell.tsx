@@ -22,12 +22,15 @@ import {
   type SetStateAction,
 } from 'react';
 import {
+  automaticStrategyTaskProfileForProjectMetadata,
   defaultScenarioPluginIdForProjectMetadata,
   type AmrWalletSnapshot,
   type ChatSessionMode,
   type ConnectorDetail,
+  type CreateProjectExampleReference,
   type InstalledPluginRecord,
   type RunContextSelection,
+  type ProjectScenarioTaskProfile,
   type WorkspaceProjectSummary,
 } from '@open-design/contracts';
 import type { OpenDesignHostProjectImportSuccess } from '@open-design/host';
@@ -120,6 +123,7 @@ import {
 } from '../runtime/amr-balance-gate';
 import { isPaidAmrPlan, resolveAmrPlan } from '../runtime/amr-low-balance-plan';
 import { HomeView, seedHomeComposerPrompt } from './HomeView';
+import { entryStrategyRoutingFields } from './entry-strategy-routing';
 import { EntryBlankState } from './EntryBlankState';
 import { RecentProjectsStrip } from './RecentProjectsStrip';
 import {
@@ -290,6 +294,9 @@ type EntryCreateProjectInput = Omit<CreateInput, 'metadata'> & {
   pluginType?: string;
   appliedPluginSnapshotId?: string;
   pluginInputs?: Record<string, unknown>;
+  automaticStrategyTaskProfile?: ProjectScenarioTaskProfile;
+  /** Official example card the user picked under the automatic route. */
+  exampleReference?: CreateProjectExampleReference;
   initialRunContext?: RunContextSelection | null;
   conversationMode?: ChatSessionMode;
   autoSendFirstMessage?: boolean;
@@ -1301,10 +1308,26 @@ export function EntryShell({
     // single row without touching the form.
     const pluginId = defaultPluginIdForMetadata(input.metadata);
     const pluginInputs = defaultPluginInputsForCreate(input, pluginId);
+    const { skillSelectionProvenance, ...projectInput } = input;
+    const automaticStrategyRoute = skillSelectionProvenance === 'explicit-user'
+      ? null
+      : automaticStrategyTaskProfileForProjectMetadata(input.metadata);
     return onCreateProject({
-      ...input,
-      ...(pluginId ? { pluginId } : {}),
-      ...(pluginInputs ? { pluginInputs } : {}),
+      ...projectInput,
+      // The modal's Blank card historically persisted a hidden default Skill
+      // (for example agent-browser) even though the automatic scenario already
+      // owns the task workflow. When OD Next replaces that scenario, carrying
+      // the hidden Skill makes it look user-selected and can correctly trip
+      // the planning-only validator. Keep explicit template/Skill picks exact;
+      // omit only the UI's implicit default on the four automatic routes.
+      ...(automaticStrategyRoute && skillSelectionProvenance === 'automatic-default'
+        ? { skillId: null }
+        : {}),
+      ...(automaticStrategyRoute
+        ? { automaticStrategyTaskProfile: automaticStrategyRoute }
+        : pluginInputs
+          ? { pluginInputs }
+          : {}),
     });
   }
 
@@ -1450,10 +1473,11 @@ export function EntryShell({
         examplePromptBrief: payload.examplePromptContext.brief,
       } : {}),
     };
+    const strategyRoutingFields = entryStrategyRoutingFields(payload, metadata);
     const createInput: EntryCreateProjectInput = {
       name,
-      skillId: payload.skillId ?? null,
-      ...(payload.skillCatalogScope
+      ...strategyRoutingFields,
+      ...(strategyRoutingFields.skillId && payload.skillCatalogScope
         ? { skillCatalogScope: payload.skillCatalogScope }
         : {}),
       designSystemId: payload.designSystemId ?? null,
@@ -1462,13 +1486,18 @@ export function EntryShell({
         : {}),
       metadata,
       pendingPrompt: payload.prompt,
-      ...(payload.pluginId ? { pluginId: payload.pluginId } : {}),
-      ...(payload.pluginSource ? { pluginSource: payload.pluginSource } : {}),
-      ...(payload.pluginType ? { pluginType: payload.pluginType } : {}),
-      ...(payload.appliedPluginSnapshotId
+      ...(payload.pluginId && !payload.pluginSelectionProvenance
+        ? { pluginId: payload.pluginId }
+        : {}),
+      ...(payload.pluginSource && !payload.pluginSelectionProvenance
+        ? { pluginSource: payload.pluginSource }
+        : {}),
+      ...(payload.pluginType && !payload.pluginSelectionProvenance
+        ? { pluginType: payload.pluginType }
+        : {}),
+      ...(payload.appliedPluginSnapshotId && !payload.pluginSelectionProvenance
         ? { appliedPluginSnapshotId: payload.appliedPluginSnapshotId }
         : {}),
-      ...(payload.pluginInputs ? { pluginInputs: payload.pluginInputs } : {}),
       ...(payload.initialRunContext ? { initialRunContext: payload.initialRunContext } : {}),
       ...(payload.conversationMode ? { conversationMode: payload.conversationMode } : {}),
       ...(payload.attachments && payload.attachments.length > 0

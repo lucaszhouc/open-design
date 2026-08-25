@@ -103,10 +103,6 @@ const REPO_URL = 'https://github.com/nexu-io/open-design';
 const GITHUB_HELP_URL = `${REPO_URL}/issues/new`;
 const GITHUB_FEATURE_URL = `${REPO_URL}/pulls`;
 const DISCORD_URL = 'https://discord.gg/mHAjSMV6gz';
-// Chinese-locale community entry. Discord is unreachable for most of that
-// audience, so the same social slot points at the Feishu (飞书) group invite.
-const FEISHU_URL =
-  'https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=866kece3-58ba-40fe-9fd4-6dc6a049f69b';
 const X_URL = 'https://x.com/OpenDesignHQ';
 const CONTACT_EMAIL_URL = 'mailto:support@open-design.ai';
 const externalLinkProps = { target: '_blank', rel: 'noreferrer noopener' } as const;
@@ -1129,9 +1125,9 @@ export function WorkspaceTopRightAccountCluster({
 /**
  * Community/contact links pinned to the bottom of the nav rail.
  *
- * The row's first slot is locale-switched: Chinese UIs get the Feishu group
- * invite (Discord is effectively unreachable there), every other locale keeps
- * Discord. X and mail are locale-independent. Analytics keeps reporting these
+ * The row's first slot is the Discord invite for every locale (the Chinese
+ * Feishu group entry was retired so there is one community to point at). X
+ * and mail are locale-independent. Analytics keeps reporting these
  * under `area: 'account_menu'` so the existing funnel stays comparable across
  * the move out of that menu.
  */
@@ -1142,11 +1138,9 @@ function RailSocialRow({
   page: TrackingWorkspacePage;
   dimensions: ReturnType<typeof workspaceAnalyticsDimensions>;
 }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const analytics = useAnalytics();
-  const isChinese = locale === 'zh-CN' || locale === 'zh-TW';
-  const communityUrl = isChinese ? FEISHU_URL : DISCORD_URL;
-  const communityLabel = isChinese ? t('entry.feishuAria') : t('entry.discordAria');
+  const communityLabel = t('entry.discordAria');
 
   function track(element: AccountMenuClickProps['element']) {
     trackAccountMenuClick(analytics.track, {
@@ -1161,14 +1155,14 @@ function RailSocialRow({
     <div className="entry-nav-rail__social" data-testid="entry-nav-rail-social">
       <a
         className="entry-nav-rail__social-btn"
-        href={communityUrl}
+        href={DISCORD_URL}
         {...externalLinkProps}
         aria-label={communityLabel}
         title={communityLabel}
-        data-testid={isChinese ? 'entry-nav-rail-feishu' : 'entry-nav-rail-discord'}
-        onClick={() => track(isChinese ? 'feishu' : 'discord')}
+        data-testid="entry-nav-rail-discord"
+        onClick={() => track('discord')}
       >
-        <Icon name={isChinese ? 'feishu' : 'discord'} size={15} />
+        <Icon name="discord" size={15} />
       </a>
       <a
         className="entry-nav-rail__social-btn"

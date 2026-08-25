@@ -64,8 +64,10 @@ jobs:
     needs: [runners]
     runs-on: ${{ fromJSON(needs.runners.outputs.runs_on).control }}
     outputs:
-      run: ${{ steps.hash.outputs.run }}
-      equal: ${{ steps.hash.outputs.equal }}
+      run: ${{ steps.convergence.outputs.run }}
+      convergence_plan_artifact: ci-convergence-plan-${{ github.run_id }}-${{ github.run_attempt }}
+      convergence_hit: ${{ steps.convergence.outputs.hit }}
+      convergence_would_run: ${{ steps.convergence.outputs.would_run }}
       scopes: ${{ steps.scopes.outputs.scopes }}
       ui_p0_matrix: ${{ steps.scopes.outputs.ui_p0_matrix }}
       visual_matrix: ${{ steps.scopes.outputs.visual_matrix }}
@@ -80,39 +82,33 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/scopes.py github-output --output "$RUNNER_TEMP/scope-plan.json"
 
-      - name: Restore previous hash map
-        id: hash_cache
-        continue-on-error: true
-        uses: actions/cache/restore@v5
-        with:
-          path: ${{ runner.temp }}/hash-state.json
-          key: ci-hash-${{ runner.os }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            ci-hash-${{ runner.os }}-${{ github.ref }}-
-
-      - name: Compare and replace hash map
-        id: hash
+      - name: Resolve reusable workload results
+        id: convergence
+        env:
+          RUNNER_PLAN_JSON: ${{ needs.runners.outputs.runs_on }}
+          OD_WORKLOAD_RESULTS_BASE_URL: ${{ secrets.OD_WORKLOAD_RESULTS_BASE_URL }}
         run: >-
-          python3 .github/scripts/hash.py github-output
+          python3 .github/scripts/convergence.py github-output
           --workflow ci
           --scope-plan "$RUNNER_TEMP/scope-plan.json"
-          --state "$RUNNER_TEMP/hash-state.json"
+          --runner-plan-json "$RUNNER_PLAN_JSON"
+          --mode shadow
+          --pending "$RUNNER_TEMP/pending-convergence.json"
 
-      # Carry the freshly computed comparison register to the gate without
-      # publishing it as reusable cache state. A failed gate must leave the
-      # previously successful map in place so an identical retry runs again.
-      - name: Upload pending hash map
+      # Shadow mode records reusable-result hits without omitting validation.
+      # The successful gate later turns this exact plan into a trusted handoff.
+      - name: Upload pending convergence plan
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: ci-hash-state-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/hash-state.json
+          name: ci-convergence-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pending-convergence.json
           if-no-files-found: error
           retention-days: 1
 
       - name: Create visual report handoff
         id: visual_report_handoff
-        if: ${{ github.event_name == 'pull_request' && fromJSON(steps.hash.outputs.run).playwright_visual }}
+        if: ${{ github.event_name == 'pull_request' && fromJSON(steps.convergence.outputs.run).playwright_visual }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -909,22 +905,40 @@ jobs:
             exit 1
           fi
 
-      - name: Download pending hash map
-        uses: actions/download-artifact@v8
+      - name: Checkout convergence control plane
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
         continue-on-error: true
+        uses: actions/checkout@v6.0.2
+
+      - name: Download pending convergence plan
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
         with:
-          name: ci-hash-state-${{ github.run_id }}-${{ github.run_attempt }}
+          # A failed-job rerun reuses the successful plan job and therefore its
+          # original attempt-scoped artifact name.
+          name: ${{ needs.plan.outputs.convergence_plan_artifact }}
           path: ${{ runner.temp }}
 
-      # Publish only after every merge-gating step has passed. The cache still
-      # contains only the identity-to-hash comparison register; successful gate
-      # completion controls publication rather than becoming cache payload.
-      - name: Save successful hash map
-        uses: actions/cache/save@v5
+      - name: Create convergence handoff
+        id: convergence_handoff
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
         continue-on-error: true
+        run: >-
+          python3 .github/scripts/convergence.py handoff
+          --pending "$RUNNER_TEMP/pending-convergence.json"
+          --products-root "$RUNNER_TEMP/convergence-products"
+          --handoff-root "$RUNNER_TEMP/handoff-convergence-ci-results"
+
+      - name: Upload convergence handoff
+        if: ${{ steps.convergence_handoff.outputs.name != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.temp }}/hash-state.json
-          key: ci-hash-${{ runner.os }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.convergence_handoff.outputs.name }}
+          path: ${{ steps.convergence_handoff.outputs.path }}
+          if-no-files-found: error
+          retention-days: 1
 
       # A failed workload ejects the queued PR just as invisibly as a blocking label does: this
       # required check fails on the queue's transient ref, the PR's own checks stay green, and

@@ -10,7 +10,7 @@
  * static landing-page contract.
  */
 
-export type PlanTier = 'plus' | 'pro' | 'max';
+export type PlanTier = 'go' | 'plus' | 'pro' | 'max';
 export type TeamPlanTier =
   | 'team_basic'
   | 'team_plus'

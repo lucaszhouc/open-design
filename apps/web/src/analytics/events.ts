@@ -149,6 +149,7 @@ import type {
   SettingsConnectorAuthResultProps,
   ByokPreflightBlockedProps,
   OnboardingClickProps,
+  AgentDetectDiagnosticProps,
   OnboardingRuntimeScanResultProps,
   OnboardingCompleteResultProps,
   OnboardingPromptPrefilledProps,
@@ -182,7 +183,7 @@ import type {
 } from '@open-design/contracts/analytics';
 
 type TrackOptions = { requestId?: string; insertId?: string };
-type Track = (
+export type Track = (
   event: string,
   properties: Record<string, unknown>,
   options?: TrackOptions,
@@ -1319,6 +1320,13 @@ export function trackOnboardingClick(
   props: OnboardingClickProps,
 ): void {
   send(track, 'ui_click', props);
+}
+
+export function trackAgentDetectDiagnostic(
+  track: Track,
+  props: AgentDetectDiagnosticProps,
+): void {
+  send(track, 'agent_detect_diagnostic', props);
 }
 
 export function trackOnboardingRuntimeScanResult(

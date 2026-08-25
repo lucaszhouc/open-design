@@ -1492,9 +1492,14 @@ export async function cancelConnectorAuthorization(connectorId: string): Promise
   }
 }
 
+
 function isAppVersionInfo(value: unknown): value is AppVersionInfo {
   if (!value || typeof value !== 'object') return false;
   const candidate = value as Partial<AppVersionInfo>;
+  // `capabilities` is optional so an older daemon's response stays valid; a
+  // present-but-wrong shape is rejected rather than half-trusted.
+  const caps = candidate.capabilities as { slideRenderer?: unknown } | undefined;
+  if (caps !== undefined && (!caps || typeof caps.slideRenderer !== 'boolean')) return false;
   return (
     typeof candidate.version === 'string' &&
     typeof candidate.channel === 'string' &&
@@ -1509,7 +1514,7 @@ export async function fetchAppVersionInfo(): Promise<AppVersionInfo | null> {
     const resp = await fetch('/api/version');
     if (!resp.ok) return null;
     const json = (await resp.json()) as Partial<AppVersionResponse>;
-    return isAppVersionInfo(json.version) ? json.version : null;
+    return isAppVersionInfo(json?.version) ? json.version : null;
   } catch {
     return null;
   }

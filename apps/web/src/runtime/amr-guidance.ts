@@ -199,6 +199,7 @@ export type RunFailureMessageKey =
   | 'chat.runError.sessionExpiredMessage'
   | 'chat.runError.gitBashMissingMessage'
   | 'chat.runError.cpuUnsupportedMessage'
+  | 'chat.runError.strategyTaskStateMismatchMessage'
   | null;
 
 // i18n keys for the unified error card's TITLE (the "error type" line above the
@@ -227,6 +228,7 @@ export type RunFailureTitleKey =
   | 'chat.runError.title.gitBashMissing'
   | 'chat.runError.title.artifactMissing'
   | 'chat.runError.title.cpuUnsupported'
+  | 'chat.runError.title.strategyTaskHalted'
   | 'chat.runError.title.generic';
 
 export interface RunFailureUi {
@@ -367,6 +369,15 @@ const AGENT_AGNOSTIC_FAILURE_UI: Record<string, RunFailureUi> = {
   AGENT_RUNTIME_DEF_INVALID: retryWithGuidance(
     'chat.runError.title.runtimeConfig',
     'chat.runError.runtimeConfigMessage',
+  ),
+  // A strategy-task continuation (clarification answer) arrived after the
+  // daemon's OD Next protocol gate already settled the task — typically a
+  // sticky `blocked` verdict. This is a task-lifecycle rejection, not an
+  // engine failure: name the halted task and point at retrying the request
+  // or starting a new one instead of showing the generic "task failed" card.
+  STRATEGY_TASK_STATE_MISMATCH: retryWithGuidance(
+    'chat.runError.title.strategyTaskHalted',
+    'chat.runError.strategyTaskStateMismatchMessage',
   ),
 };
 

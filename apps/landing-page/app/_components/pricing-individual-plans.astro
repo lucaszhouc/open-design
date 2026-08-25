@@ -107,6 +107,13 @@ const renderCatalogLabel = (label: string) => fillTemplate(label, {
   systemsCount,
 });
 
+const apiKeyBenefit = renderCatalogLabel(P.bringYourOwnApiKey);
+const apiKeyHelp = locale === 'zh'
+  ? '可绑定其他模型服务商的 API Key，在 Open Design 中调用对应模型；本套餐不提供对外 API 服务。'
+  : locale === 'zh-tw'
+    ? '可綁定其他模型服務商的 API Key，在 Open Design 中調用對應模型；本方案不提供對外 API 服務。'
+    : 'Connect API keys from other model providers and use their models in Open Design. This plan does not provide public API access.';
+
 const tierCopy = {
   go: content.go,
   ...content.plans,
@@ -460,6 +467,21 @@ const otherModels = 'Gemini-3.1-Pro, Grok-4.5, GPT-5.4, GPT-5.6-Terra, Qwen3.7-M
                           <span>{fillTemplate(L.creditBonus, { pct: String(bonusPct) })}</span>
                         </span>
                       )}
+                      {benefit === apiKeyBenefit && (
+                        <span class="benefit-help">
+                          <button
+                            type="button"
+                            class="benefit-help-trigger"
+                            aria-label={apiKeyHelp}
+                            aria-describedby={`api-key-help-${tier}`}
+                          >?</button>
+                          <span
+                            id={`api-key-help-${tier}`}
+                            class="benefit-help-tooltip"
+                            role="tooltip"
+                          >{apiKeyHelp}</span>
+                        </span>
+                      )}
                     </span>
                   </li>
                 ))}
@@ -781,6 +803,12 @@ const otherModels = 'Gemini-3.1-Pro, Grok-4.5, GPT-5.4, GPT-5.6-Terra, Qwen3.7-M
     letter-spacing: -0.045em;
   }
 
+  .rolling-price-number {
+    display: inline-block;
+    will-change: transform, opacity;
+    animation: pricing-number-roll-in 0.38s cubic-bezier(0.22, 0.72, 0.24, 1);
+  }
+
   .price small {
     margin-left: 5px;
     color: #73776f;
@@ -1069,6 +1097,16 @@ const otherModels = 'Gemini-3.1-Pro, Grok-4.5, GPT-5.4, GPT-5.6-Terra, Qwen3.7-M
   .plan-model-module li:nth-child(n + 4) { display: none; }
   .plan-model-module.is-expanded li:nth-child(n + 4) { display: grid; }
 
+  .plan-model-module.is-expanded li:nth-child(n + 4) {
+    opacity: 0;
+    animation: model-item-reveal 0.22s ease-out forwards;
+  }
+  .plan-model-module.is-expanded li:nth-child(4) { animation-delay: 25ms; }
+  .plan-model-module.is-expanded li:nth-child(5) { animation-delay: 50ms; }
+  .plan-model-module.is-expanded li:nth-child(6) { animation-delay: 75ms; }
+  .plan-model-module.is-expanded li:nth-child(7) { animation-delay: 100ms; }
+  .plan-model-module.is-expanded li:nth-child(n + 8) { animation-delay: 125ms; }
+
   .plan-model-module.is-expanded {
     padding: 12px;
   }
@@ -1197,6 +1235,61 @@ const otherModels = 'Gemini-3.1-Pro, Grok-4.5, GPT-5.4, GPT-5.6-Terra, Qwen3.7-M
   }
 
   .plan-benefit-list li + li { margin-top: 12px; }
+
+  .benefit-help {
+    position: relative;
+    display: inline-flex;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .benefit-help-trigger {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    color: #62675f;
+    font: 650 10px/1 Albert Sans, Arial, sans-serif;
+    cursor: help;
+    background: transparent;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+  }
+
+  .benefit-help-trigger:focus-visible {
+    outline: 2px solid var(--pricing-accent);
+    outline-offset: 2px;
+  }
+
+  .benefit-help-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    z-index: 8;
+    width: min(260px, 72vw);
+    padding: 9px 11px;
+    color: #f4f5f1;
+    font-size: 10px;
+    font-weight: 450;
+    line-height: 1.5;
+    text-align: left;
+    pointer-events: none;
+    visibility: hidden;
+    background: #20221e;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(24, 28, 22, 0.18);
+    opacity: 0;
+    transform: translate(-50%, 4px);
+    transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+  }
+
+  .benefit-help:hover .benefit-help-tooltip,
+  .benefit-help:focus-within .benefit-help-tooltip {
+    visibility: visible;
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
   .plan-benefit-list li > b {
     color: #4a9c2f;
     font-size: 15px;
@@ -1762,6 +1855,14 @@ const otherModels = 'Gemini-3.1-Pro, Grok-4.5, GPT-5.4, GPT-5.6-Terra, Qwen3.7-M
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
   }
+  @keyframes pricing-number-roll-in {
+    from { opacity: 0; transform: translateY(72%); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes model-item-reveal {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
   @keyframes usage-meter-in {
     from { opacity: 0.4; transform: scaleX(0); }
     to { opacity: 1; transform: scaleX(1); }
@@ -1799,7 +1900,9 @@ const otherModels = 'Gemini-3.1-Pro, Grok-4.5, GPT-5.4, GPT-5.6-Terra, Qwen3.7-M
 
   @media (prefers-reduced-motion: reduce) {
     .pricing-card,
-    .individual-usage-meter i {
+    .individual-usage-meter i,
+    .rolling-price-number,
+    .plan-model-module.is-expanded li:nth-child(n + 4) {
       animation: none;
       transform: none;
     }

@@ -60,7 +60,11 @@ import {
 } from '../providers/daemon';
 import { installDeepSeekHarnessCompanion } from '../providers/agent-companion';
 import { amrProfileBadgeLabel } from '../runtime/amr-guidance';
-import { deepSeekHarnessNeedsSetup, isVisibleLocalCliAgent } from '../utils/visibleAgents';
+import {
+  availableVisibleAgentCount,
+  deepSeekHarnessNeedsSetup,
+  isVisibleLocalCliAgent,
+} from '../utils/visibleAgents';
 import { ExportDiagnosticsRow } from './ExportDiagnosticsButton';
 import { Icon } from './Icon';
 import { defaultAgentModelId, effectiveAgentModelChoice } from './agentModelSelection';
@@ -2326,7 +2330,7 @@ export function SettingsDialog({
       const nextAgents = Array.isArray(refreshed) ? refreshed : agents;
       setAgentRescanNotice({
         kind: 'success',
-        count: nextAgents.filter((a) => a.available).length,
+        count: availableVisibleAgentCount(nextAgents),
       });
     } catch {
       setAgentRescanNotice({ kind: 'error' });

@@ -61,9 +61,6 @@ export interface AccountMenuClickProps extends TrackingWorkspaceDimensions {
     | 'feature_request'
     | 'github'
     | 'discord'
-    // Chinese locales swap the Discord link for the Feishu group invite; the
-    // slot is the same social entry, so it stays in this union.
-    | 'feishu'
     | 'twitter'
     | 'email'
     | 'logout';
