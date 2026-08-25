@@ -255,6 +255,52 @@ describe("pricing contract", () => {
     assert.doesNotMatch(compactSavingsBlock, /replace\('\$', ''\)/);
   });
 
+  it("keeps the domain and third-party API key copy unambiguous", async () => {
+    const content = getPricingContent("en");
+    const zhContent = getPricingContent("zh");
+    const zhTwContent = getPricingContent("zh-tw");
+    const individualPlans = await readFile(PRICING_INDIVIDUAL_PATH, "utf8");
+
+    assert.equal(content.personal.customDomains, "{count} domains");
+    assert.equal(content.personal.unlimitedCustomDomains, "Unlimited domains");
+    assert.equal(content.personal.bringYourOwnApiKey, "Supports third-party API keys");
+    assert.equal(zhContent.personal.customDomains, "支持 {count} 个域名");
+    assert.equal(zhContent.personal.unlimitedCustomDomains, "域名无限量");
+    assert.equal(zhContent.personal.bringYourOwnApiKey, "支持接入第三方 API Key");
+    assert.equal(zhTwContent.personal.customDomains, "支援 {count} 個網域");
+    assert.equal(zhTwContent.personal.unlimitedCustomDomains, "網域無限量");
+    assert.equal(zhTwContent.personal.bringYourOwnApiKey, "支援接入第三方 API Key");
+    assert.match(
+      individualPlans,
+      /可绑定其他模型服务商的 API Key，在 Open Design 中调用对应模型；本套餐不提供对外 API 服务。/,
+    );
+    assert.match(individualPlans, /class="benefit-help-trigger"/);
+    assert.match(individualPlans, /class="benefit-help-tooltip"/);
+    assert.match(individualPlans, /role="tooltip"/);
+  });
+
+  it("animates billing-price changes and compact-card View all reveals", async () => {
+    const individualPlans = await readFile(PRICING_INDIVIDUAL_PATH, "utf8");
+
+    assert.match(
+      individualPlans,
+      /\.rolling-price-number\s*\{[^}]*animation:\s*pricing-number-roll-in 0\.38s cubic-bezier\(0\.22, 0\.72, 0\.24, 1\);/s,
+    );
+    assert.match(
+      individualPlans,
+      /@keyframes pricing-number-roll-in\s*\{[^}]*translateY\(72%\)[\s\S]*?translateY\(0\)/,
+    );
+    assert.match(
+      individualPlans,
+      /\.plan-model-module\.is-expanded li:nth-child\(n \+ 4\)\s*\{[^}]*animation:\s*model-item-reveal 0\.22s ease-out forwards;/s,
+    );
+    assert.match(individualPlans, /animation-delay:\s*125ms;/);
+    assert.match(
+      individualPlans,
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?\.rolling-price-number,[\s\S]*?\.plan-model-module\.is-expanded li:nth-child\(n \+ 4\)\s*\{[^}]*animation:\s*none;/,
+    );
+  });
+
   it("keeps recommendation ribbons legible, animated, and motion-safe", async () => {
     const individualPlans = await readFile(PRICING_INDIVIDUAL_PATH, "utf8");
 
@@ -966,6 +1012,11 @@ describe("pricing contract", () => {
     assert.match(page, /data-downgrade-plan-label=\{planActionLabels\.downgrade\}/);
     assert.match(page, /data-upgrade-plan-label=\{planActionLabels\.upgrade\}/);
     assert.match(page, /loadPersonalPricingContext\(apiOrigin\)/);
+    assert.match(page, /pricing:personal-context-resolved/);
+    assert.match(page, /resolvePricingBridgeSource/);
+    assert.match(page, /authenticated:\s*true/);
+    assert.doesNotMatch(page, /pricingCompatibilityAttribution/);
+    assert.doesNotMatch(page, /tiers:\s*PRICING_SNAPSHOT\.tiers/);
     assert.match(page, /resolvePersonalPlanAction\(pricingContext/);
     assert.match(page, /action\.kind === 'dual_change'/);
     assert.doesNotMatch(page, /action\.kind === 'manage_billing'/);
@@ -986,6 +1037,31 @@ describe("pricing contract", () => {
     );
     assert.match(individualPlans, /data-pricing-cta\s+data-tier=\{tier\}/);
     assert.match(individualPlans, /\.pricing-card-cta\s*\{[^}]*border:\s*0;/s);
+  });
+
+  it("records Pricing Enterprise submit intent before shared-form validation", async () => {
+    const [page, form] = await Promise.all([
+      readFile(PRICING_PAGE_PATH, "utf8"),
+      readFile(
+        new URL("../app/_components/enterprise-lead-form.astro", import.meta.url),
+        "utf8",
+      ),
+    ]);
+    const submitHandler = form.slice(
+      form.indexOf("form.addEventListener('submit'"),
+      form.indexOf("const data = new FormData(form)"),
+    );
+    assert.match(
+      submitHandler,
+      /pricing:enterprise-submit[\s\S]*?\['email', 'team-size'/,
+    );
+    assert.doesNotMatch(
+      page.slice(
+        page.indexOf("modal.addEventListener('od:lead-success'"),
+        page.indexOf("});", page.indexOf("modal.addEventListener('od:lead-success'")) + 3,
+      ),
+      /pricing:enterprise-submit/,
+    );
   });
 
   it("restores account actions only on Pricing", async () => {
