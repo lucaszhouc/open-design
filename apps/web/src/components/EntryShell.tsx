@@ -161,10 +161,6 @@ import { useWorkspaceInvalidation } from '../collab/workspace-events';
 import { resolvePlanLabelTier } from '../collab/team-plan';
 import { resolveDeepSeekV4FlashCampaignAudience } from '../campaigns/deepseek-v4-flash';
 import { useDeepSeekV4FlashCampaignVisibility } from '../campaigns/use-deepseek-v4-flash-campaign';
-import {
-  resolveSubscriptionAudience,
-} from '../campaigns/go-plan';
-import { useGoPlanCampaignVisibility } from '../campaigns/use-go-plan-campaign';
 import { WorkbenchCampaignBadge } from './WorkbenchCampaignBadge';
 import {
   beginWorkspaceScopedRead,
@@ -662,8 +658,8 @@ export function EntryShell({
     workspaceBillingResponse,
     workspaceContext,
   );
+  const [goPlanSunsetMessagePending, setGoPlanSunsetMessagePending] = useState(false);
   const deepSeekCampaignVisibility = useDeepSeekV4FlashCampaignVisibility();
-  const goPlanCampaignVisibility = useGoPlanCampaignVisibility();
   // Same personal-vs-team accountPlan rule as App's `resolvedAmrPlan`.
   const deepSeekCampaignPlan = resolvePlanLabelTier({
     billing: workspaceBilling,
@@ -673,7 +669,7 @@ export function EntryShell({
         ? null
         : amrAccountPlan?.trim() || null,
   });
-  const deepSeekV4FlashCampaignAudience = resolveDeepSeekV4FlashCampaignAudience({
+  const resolvedDeepSeekV4FlashCampaignAudience = resolveDeepSeekV4FlashCampaignAudience({
     // Subscription is the only campaign segmentation axis. In particular,
     // `resolvePlanLabelTier` turns the backend-confirmed unsubscribed state into
     // `free`; wallet balance / historical recharge never upgrades this audience.
@@ -681,24 +677,13 @@ export function EntryShell({
     loggedIn: amrLoggedIn,
     now: deepSeekCampaignVisibility.now,
   });
-  const subscriptionAudience = resolveSubscriptionAudience({
-    plan: deepSeekCampaignPlan,
-    loggedIn: amrLoggedIn,
-  });
-  const homeCampaignModalAudience =
-    subscriptionAudience === 'unpaid' && goPlanCampaignVisibility.visible
-      ? 'unpaid'
-      : deepSeekV4FlashCampaignAudience === 'paid'
-        ? 'paid'
-        : 'unknown';
-  const topRightCampaignKind =
-    subscriptionAudience === 'unpaid'
-      ? goPlanCampaignVisibility.visible
-        ? 'go'
-        : null
-      : deepSeekV4FlashCampaignAudience === 'paid'
-        ? 'deepseek'
-        : null;
+  const deepSeekV4FlashCampaignAudience = goPlanSunsetMessagePending
+    ? 'unknown'
+    : resolvedDeepSeekV4FlashCampaignAudience;
+  const topRightCampaignAudience =
+    deepSeekV4FlashCampaignAudience === 'unknown'
+      ? null
+      : deepSeekV4FlashCampaignAudience;
   const workspaceBalanceUsd = workspaceBillingBalanceUsd(
     workspaceBillingResponse,
     workspaceContext,
@@ -1642,12 +1627,13 @@ export function EntryShell({
           onOpenSearch={() => setProjectSearchOpen(true)}
           open={railOpen}
           topRightSlot={
-            topRightCampaignKind ? (
+            topRightCampaignAudience ? (
               <WorkbenchCampaignBadge
-                kind={topRightCampaignKind}
+                audience={topRightCampaignAudience}
                 page="home"
                 metricsConsent={config.telemetry?.metrics === true}
                 installationId={config.installationId}
+                loggedIn={amrLoggedIn}
               />
             ) : null
           }
@@ -1664,6 +1650,15 @@ export function EntryShell({
           // only a successful null context (or known local sign-out) may show
           // the sign-in card.
           footerNotice={accountFooterNotice}
+          priorityAnnouncementActive={
+            view === 'home'
+            && goPlanSunsetMessagePending
+            && amrBalanceGateBlock == null
+            && amrLowBalanceWarn == null
+          }
+          onPriorityAnnouncementPendingChange={setGoPlanSunsetMessagePending}
+          priorityAnnouncementCurrentPlanId={deepSeekCampaignPlan}
+          priorityAnnouncementMetricsConsent={config.telemetry?.metrics === true}
         />
         {projectSearchOpen ? (
           <ProjectSearchModal
@@ -1680,7 +1675,7 @@ export function EntryShell({
               the workspace tabs bar (entryRailBridge), the updater popup host
               lives in the rail footer, and everything below is fixed-position
               or portalled so it occupies no layout space here. */}
-          <WhatsNewPopup active={view === 'home'} />
+          <WhatsNewPopup active={view === 'home' && !goPlanSunsetMessagePending} />
           {/* The campaign badge lives in EntryNavRail's top-right cluster so it
               stays beside the account module across every entry tab. */}
           {amrBalanceGateBlock ? (
@@ -1744,7 +1739,7 @@ export function EntryShell({
                 promptTemplates={promptTemplates}
                 executionSwitcher={view === 'home' ? homeExecutionSwitcher : undefined}
                 artifactUpgradeSlot={artifactUpgradeSlot}
-                deepSeekV4FlashCampaignAudience={homeCampaignModalAudience}
+                deepSeekV4FlashCampaignAudience={deepSeekV4FlashCampaignAudience}
                 onDeepSeekV4FlashCampaignUseNow={applyDeepSeekCampaignModel}
                 deepSeekV4FlashCampaignMetricsConsent={config.telemetry?.metrics === true}
                 deepSeekV4FlashCampaignInstallationId={config.installationId ?? null}
@@ -1782,6 +1777,7 @@ export function EntryShell({
                 designTemplates={designTemplates}
                 connectors={connectors}
                 connectorsLoading={connectorsLoading}
+                isActive={view === 'tasks'}
               />
             </div>
             <div data-testid="entry-view-plugins" data-active={view === 'plugins' ? 'true' : 'false'} {...inactiveViewProps(view === 'plugins')}>
@@ -2086,6 +2082,7 @@ function OnboardingView({
   const analytics = useAnalytics();
   const [step, setStep] = useState(0);
   const [runtime, setRuntime] = useState<'amr' | 'local' | 'byok' | null>(null);
+  const [runtimeSetupEntry, setRuntimeSetupEntry] = useState<'cloud' | 'chooser'>('chooser');
   const [modelSource, setModelSource] = useState<'amr' | 'local' | 'byok'>('amr');
   const modelSourceOptionRefs = useRef<
     Record<'amr' | 'local' | 'byok', HTMLButtonElement | null>
@@ -2145,6 +2142,8 @@ function OnboardingView({
   } | null>(null);
   const cliRefreshPendingTokenRef = useRef<number | null>(null);
   const amrLoginPollCancelledRef = useRef(false);
+  const amrHydratedLoginPollStartedRef = useRef(false);
+  const onboardingMountedRef = useRef(true);
   const amrLoginStartPendingRef = useRef(false);
   const amrLoginCancelRequestedRef = useRef(false);
   const amrAuthAttemptIdRef = useRef<string | null>(null);
@@ -2209,6 +2208,7 @@ function OnboardingView({
   );
   const visibleAgents = candidateCliAgents.filter((agent) => visibleAgentIds.includes(agent.id));
   const amrSignedIn = isAmrSessionAuthenticated(amrStatus);
+  const amrLoginBusy = amrLoginPending || amrStatus?.loginInFlight === true;
   const selectedAgent = visibleAgents.find((agent) => agent.id === config.agentId) ?? null;
   const selectedAgentChoice = selectedAgent ? (config.agentModels?.[selectedAgent.id] ?? {}) : {};
   const normalizedSelectedAgentChoice = effectiveAgentModelChoice(selectedAgent, selectedAgentChoice) ?? selectedAgentChoice;
@@ -2252,6 +2252,10 @@ function OnboardingView({
     agentTestInputKey,
     providerTestInputKey,
   };
+  const cloudLandingIntentStillCurrent = () => {
+    const intent = onboardingIntentRef.current;
+    return intent.step === 0 && intent.runtime === null;
+  };
   const connectGateReason: 'no_runtime' | 'local_agent_unavailable' | 'byok_unverified' | null =
     !runtimeSetupStep
       ? null
@@ -2281,7 +2285,9 @@ function OnboardingView({
         );
 
   useEffect(() => {
+    onboardingMountedRef.current = true;
     return () => {
+      onboardingMountedRef.current = false;
       amrLoginPollCancelledRef.current = true;
       agentRevealTimersRef.current.forEach((timer) => clearTimeout(timer));
       agentRevealTimersRef.current = [];
@@ -2326,6 +2332,12 @@ function OnboardingView({
       .then((next) => {
         if (!cancelled && next) {
           setAmrStatus(next);
+          if (next.authAttemptId) {
+            amrAuthAttemptIdRef.current = next.authAttemptId;
+          }
+          if (next.loginInFlight && cloudLandingIntentStillCurrent()) {
+            startHydratedAmrLoginPoll();
+          }
           onAmrLoginStatusChange?.(next);
         }
       })
@@ -2336,6 +2348,21 @@ function OnboardingView({
       cancelled = true;
     };
   }, [onAmrLoginStatusChange]);
+
+  useEffect(() => {
+    if (
+      step !== 0
+      || runtime !== null
+      || amrLoginPending
+      || amrStatus?.loginInFlight !== true
+    ) {
+      return;
+    }
+    // The mount status request may settle while a direct Local/BYOK setup is
+    // active. Returning to the Cloud landing must resume observation of that
+    // hydrated attempt instead of leaving its stale cancel state indefinitely.
+    startHydratedAmrLoginPoll();
+  }, [amrLoginPending, amrStatus?.loginInFlight, runtime, step]);
 
   useEffect(() => {
     if (
@@ -2363,7 +2390,7 @@ function OnboardingView({
   ]);
 
   useEffect(() => {
-    if (runtime === 'amr') return;
+    if (runtime === 'amr' || runtime === null) return;
     amrLoginPollCancelledRef.current = true;
     setAmrLoginPending(false);
     setAmrLoginCancelPending(false);
@@ -2641,7 +2668,7 @@ function OnboardingView({
     emitOnboardingClick('back', 'back');
     clearAgentRevealTimers();
     setRuntime(null);
-    setStep(1);
+    setStep(runtimeSetupEntry === 'cloud' ? 0 : 1);
   }
 
   function completeStreamlinedOnboarding(
@@ -2663,6 +2690,28 @@ function OnboardingView({
       return;
     }
     setStep(1);
+  }
+
+  function startHydratedAmrLoginPoll(): void {
+    if (amrHydratedLoginPollStartedRef.current) return;
+    amrHydratedLoginPollStartedRef.current = true;
+    amrLoginPollCancelledRef.current = false;
+    setAmrLoginPending(true);
+    void pollAmrLoginCompletion()
+      .then((completed) => {
+        if (
+          completed
+          && onboardingMountedRef.current
+          && cloudLandingIntentStillCurrent()
+        ) {
+          continueAfterCloudSignIn();
+        }
+      })
+      .finally(() => {
+        if (onboardingMountedRef.current) {
+          setAmrLoginPending(false);
+        }
+      });
   }
 
   function handleModelSourceKeyDown(
@@ -2709,6 +2758,7 @@ function OnboardingView({
         runtime_type: 'local_cli',
       });
       setRuntime('local');
+      setRuntimeSetupEntry('chooser');
       void scanCliAgents({ preferExisting: true });
       setStep(2);
       return;
@@ -2716,6 +2766,7 @@ function OnboardingView({
 
     emitOnboardingClick('byok', 'select_runtime', { runtime_type: 'byok' });
     setRuntime('byok');
+    setRuntimeSetupEntry('chooser');
     setStep(2);
   }
   /**
@@ -2782,7 +2833,7 @@ function OnboardingView({
   // chosen on the following screen so signing in never overwrites a restored
   // Local/BYOK configuration.
   async function handleCloudSignIn() {
-    if (amrLoginPending || amrLoginCancelPending) return;
+    if (amrLoginBusy || amrLoginCancelPending) return;
     const cardAttribution = recordAmrEntry(
       analytics.track,
       'onboarding_amr_card',
@@ -2804,7 +2855,7 @@ function OnboardingView({
   async function handleAmrSignInToContinue(
     attribution?: AmrEntryAttribution | null,
   ) {
-    if (amrLoginPending || amrLoginCancelPending) return;
+    if (amrLoginBusy || amrLoginCancelPending) return;
     amrLoginPollCancelledRef.current = false;
     amrLoginCancelRequestedRef.current = false;
     setAmrLoginError(null);
@@ -2926,7 +2977,7 @@ function OnboardingView({
   }
 
   async function handleCancelAmrLogin() {
-    if (!amrLoginPending || amrLoginCancelPending) return;
+    if (!amrLoginBusy || amrLoginCancelPending) return;
     const loginStartPending = amrLoginStartPendingRef.current;
     const authAttemptId = amrAuthAttemptIdRef.current;
     setAmrLoginError(null);
@@ -3022,7 +3073,14 @@ function OnboardingView({
             resolveAmrAuthTracking(analytics.track, 'timeout', 'login_timeout', {
               authAttemptId,
             });
-            void cancelVelaLogin(authAttemptId);
+            const cancelResult = await cancelVelaLogin(authAttemptId);
+            if (cancelResult.canceled === true) {
+              setAmrStatus((current) => (
+                current
+                  ? { ...current, loggedIn: false, loginInFlight: false, user: null }
+                  : current
+              ));
+            }
           }
           console.error('[amr-login] poll timed out waiting for a signed-in status', { nextStatus });
         } else {
@@ -3297,10 +3355,10 @@ function OnboardingView({
 
   const primaryActionLabel = t('settings.onboardingContinue');
 
-  // Step 1 is identity only: every user signs into OpenDesign Cloud before
-  // choosing Hosted, Local, or BYOK on the next screen.
+  // Cloud remains the primary identity path. Local CLI and BYOK are independent
+  // direct setup paths; authenticated users keep the full source chooser.
   if (step === 0) {
-    const cloudBusy = amrLoginPending;
+    const cloudBusy = amrLoginBusy;
     const amrStatusResolving = !amrStatusResolved;
     return (
       <section
@@ -3393,7 +3451,42 @@ function OnboardingView({
               >
                 {t('settings.amrCancelSignIn')}
               </button>
-            ) : null}
+            ) : (
+              <div className="onboarding-cloud__alts">
+                <Button
+                  variant="subtle"
+                  className="onboarding-cloud__alt-btn"
+                  onClick={() => {
+                    emitOnboardingClick('local_coding_agent', 'select_runtime', {
+                      runtime_type: 'local_cli',
+                    });
+                    setRuntime('local');
+                    setRuntimeSetupEntry('cloud');
+                    void scanCliAgents({ preferExisting: true });
+                    setStep(2);
+                  }}
+                >
+                  <Icon name="robot" size={16} />
+                  {t('settings.onboardingLocalTitle')}
+                </Button>
+                <span className="onboarding-cloud__alts-or">
+                  {t('settings.onboardingCloudOr')}
+                </span>
+                <Button
+                  variant="subtle"
+                  className="onboarding-cloud__alt-btn"
+                  onClick={() => {
+                    emitOnboardingClick('byok', 'select_runtime', { runtime_type: 'byok' });
+                    setRuntime('byok');
+                    setRuntimeSetupEntry('cloud');
+                    setStep(2);
+                  }}
+                >
+                  <Icon name="key" size={16} />
+                  {t('settings.onboardingByokTitle')}
+                </Button>
+              </div>
+            )}
           </div>
           <footer className="onboarding-cloud__footer">
             <LanguageMenu placement="up" align="start" />

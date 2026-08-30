@@ -3787,12 +3787,13 @@ function ChatRows({
         hasDesignSystemContext={hasActiveDesignSystem || !!activeDesignSystem}
         onSubmitQuestionForm={
           onSubmitQuestionForm
-            ? (text, attachments, context) =>
+            ? (text, attachments, context, _sourceAssistantMessageId, formId) =>
                 assistantCallbacksRef.current.onSubmitQuestionForm?.(
                   text,
                   attachments,
                   context,
                   m.id,
+                  formId,
                 )
             : undefined
         }

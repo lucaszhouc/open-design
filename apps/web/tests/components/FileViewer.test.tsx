@@ -3488,6 +3488,227 @@ describe('FileViewer SVG artifacts', () => {
     expect(writes).toHaveLength(2);
     expect(writes.at(-1)).toContain('Edited after return');
     expect(writes.at(-1)).toContain('translate(12px, 8px)');
+    const editResults = analyticsTrackMock.mock.calls
+      .filter(([eventName]) => eventName === 'artifact_edit_result')
+      .map(([, properties]) => properties);
+    expect(editResults).toHaveLength(2);
+    expect(editResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: 'apply',
+        edit_kind: 'style',
+        result: 'success',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+      expect.objectContaining({
+        action: 'apply',
+        edit_kind: 'text',
+        result: 'success',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+    ]));
+  });
+
+  it('emits one result event when a user clicks manual edit undo and redo', async () => {
+    analyticsTrackMock.mockClear();
+    const file = baseFile({
+      name: 'history.html',
+      path: 'history.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'History',
+        entry: 'history.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    const initialSource = '<html><body><main data-od-id="hero">Hero</main></body></html>';
+    let persistedSource = initialSource;
+    const writes: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/files/history.html/versions')) {
+        return new Response(JSON.stringify({ versions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/projects/project-1/files') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { content: string };
+        persistedSource = body.content;
+        writes.push(body.content);
+        return new Response(JSON.stringify({ file: { ...file, mtime: file.mtime + writes.length } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/projects/project-1/raw/history.html')) {
+        return new Response(persistedSource, { status: 200 });
+      }
+      return new Response(JSON.stringify({ deployments: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+
+    render(
+      <FileViewer
+        projectId="project-1"
+        projectKind="prototype"
+        file={file}
+        liveHtml={initialSource}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-preview-frame').getAttribute('data-od-render-mode')).toBe('srcdoc');
+    });
+    const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    const target = manualEditTarget('hero', 'Hero', 20);
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: { type: 'od-edit-select', target },
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: {
+        type: 'od-edit-drag-commit',
+        id: 'hero',
+        transform: 'translate(12px, 8px)',
+        display: 'block',
+      },
+    }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: { type: 'od-edit-select', target },
+    }));
+    const undo = await screen.findByRole('button', { name: 'Undo' });
+    await waitFor(() => expect(undo).toBeEnabled());
+    fireEvent.click(undo);
+    await waitFor(() => expect(writes).toHaveLength(2));
+
+    const redo = screen.getByRole('button', { name: 'Redo' });
+    await waitFor(() => expect(redo).toBeEnabled());
+    fireEvent.click(redo);
+    await waitFor(() => expect(writes).toHaveLength(3));
+
+    const historyResults = analyticsTrackMock.mock.calls
+      .filter(([eventName, properties]) => (
+        eventName === 'artifact_edit_result' &&
+        (properties?.action === 'undo' || properties?.action === 'redo')
+      ))
+      .map(([, properties]) => properties);
+    expect(historyResults).toEqual([
+      expect.objectContaining({
+        action: 'undo',
+        edit_kind: 'style',
+        result: 'success',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+      expect.objectContaining({
+        action: 'redo',
+        edit_kind: 'style',
+        result: 'success',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+    ]);
+  });
+
+  it('does not emit an edit result when an in-flight save settles after deactivation', async () => {
+    analyticsTrackMock.mockClear();
+    const file = baseFile({
+      name: 'inactive-save.html',
+      path: 'inactive-save.html',
+      mime: 'text/html',
+      kind: 'html',
+      artifactManifest: {
+        version: 1,
+        kind: 'html',
+        title: 'Inactive save',
+        entry: 'inactive-save.html',
+        renderer: 'html',
+        exports: ['html'],
+      },
+    });
+    const initialSource = '<html><body><main data-od-id="hero">Hero</main></body></html>';
+    const pendingSave = deferredResponse();
+    const writes: string[] = [];
+    const onFileSaved = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/files/inactive-save.html/versions')) {
+        return new Response(JSON.stringify({ versions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.endsWith('/api/projects/project-1/files') && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { content: string };
+        writes.push(body.content);
+        return pendingSave.promise;
+      }
+      if (url.includes('/api/projects/project-1/raw/inactive-save.html')) {
+        return new Response(initialSource, { status: 200 });
+      }
+      return new Response(JSON.stringify({ deployments: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }));
+
+    const props = {
+      projectId: 'project-1',
+      projectKind: 'prototype' as const,
+      file,
+      liveHtml: initialSource,
+      onFileSaved,
+    };
+    const { rerender } = render(<FileViewer {...props} workspaceActive />);
+
+    fireEvent.click(screen.getByTestId('manual-edit-mode-toggle'));
+    await waitFor(() => {
+      expect(screen.getByTestId('artifact-preview-frame').getAttribute('data-od-render-mode')).toBe('srcdoc');
+    });
+    const frame = screen.getByTestId('artifact-preview-frame') as HTMLIFrameElement;
+    const target = manualEditTarget('hero', 'Hero', 20);
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: { type: 'od-edit-select', target },
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      source: frame.contentWindow,
+      data: {
+        type: 'od-edit-drag-commit',
+        id: 'hero',
+        transform: 'translate(12px, 8px)',
+        display: 'block',
+      },
+    }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(writes).toHaveLength(1));
+
+    rerender(<FileViewer {...props} workspaceActive={false} />);
+    act(() => {
+      pendingSave.resolve(new Response(JSON.stringify({ file }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    });
+    await waitFor(() => expect(onFileSaved).toHaveBeenCalledTimes(1));
+
+    expect(analyticsTrackMock.mock.calls.filter(
+      ([eventName]) => eventName === 'artifact_edit_result',
+    )).toHaveLength(0);
   });
 
   it('keeps the edit iframe stable across save watcher echoes, then consumes the latest revision on exit', async () => {
@@ -3618,6 +3839,18 @@ describe('FileViewer SVG artifacts', () => {
     // The save error is surfaced and edit mode stays open instead of tearing down.
     expect(await screen.findByText(/Could not save the edited file/)).toBeTruthy();
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(analyticsTrackMock).toHaveBeenCalledWith(
+      'artifact_edit_result',
+      expect.objectContaining({
+        action: 'apply',
+        edit_kind: 'text',
+        result: 'failed',
+        error_code: 'save_failed',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+      undefined,
+    );
   });
 
   it('keeps edit mode open when inline finish times out without an ack or commit witness', async () => {
@@ -5362,6 +5595,8 @@ describe('FileViewer SVG artifacts', () => {
       expect(views[0]).toMatchObject({
         page_name: 'artifact',
         area: 'deck_viewer',
+        project_id: 'project-1',
+        project_kind: 'prototype',
       });
       // slide_count is snapshotted at first deck recognition, before the
       // iframe reports its real total — so we assert it is a resolved number
@@ -5393,6 +5628,8 @@ describe('FileViewer SVG artifacts', () => {
         area: 'deck_viewer',
         element: 'thumbnail_rail_toggle',
         action: 'collapse',
+        project_id: 'project-1',
+        project_kind: 'prototype',
       });
       expect(toggles[1]).toMatchObject({ action: 'expand' });
     });
@@ -5421,6 +5658,8 @@ describe('FileViewer SVG artifacts', () => {
         page_name: 'artifact',
         area: 'deck_viewer',
         element: 'slide_next',
+        project_id: 'project-1',
+        project_kind: 'prototype',
       });
       expect(typeof nexts[0].slide_index).toBe('number');
     });
@@ -5449,6 +5688,8 @@ describe('FileViewer SVG artifacts', () => {
         page_name: 'artifact',
         area: 'deck_viewer',
         element: 'speaker_notes_edit',
+        project_id: 'project-1',
+        project_kind: 'prototype',
       });
     });
 
@@ -5492,6 +5733,8 @@ describe('FileViewer SVG artifacts', () => {
         edit_surface: 'preview',
         result: 'success',
         has_content: true,
+        project_id: 'project-1',
+        project_kind: 'prototype',
       });
     });
   });
@@ -7367,7 +7610,7 @@ describe('FileViewer SVG artifacts', () => {
     // preview action becomes enabled from the same
     // selectedContentMatchesVersion/loadingContent state that enables deck
     // keyboard routing.
-    const openPreview = within(versionDialog).getByRole('button', { name: 'Open preview' }) as HTMLButtonElement;
+    const openPreview = within(versionDialog).getByRole('button', { name: 'Open preview in a new window' }) as HTMLButtonElement;
     await waitFor(() => expect(openPreview.disabled).toBe(false));
     const previewFrame = await waitFor(() => {
       const frame = versionDialog.querySelector('iframe[title="index.html v4"]') as HTMLIFrameElement | null;
@@ -7699,7 +7942,7 @@ describe('FileViewer SVG artifacts', () => {
     const versionDialog = await screen.findByRole('dialog', { name: 'Versions' });
     fireEvent.click(within(versionDialog).getByRole('option', { name: /Prior prompt/ }));
     const switchButton = within(versionDialog).getByRole('button', { name: 'Switch to this version' }) as HTMLButtonElement;
-    const openButton = within(versionDialog).getByRole('button', { name: 'Open preview' }) as HTMLButtonElement;
+    const openButton = within(versionDialog).getByRole('button', { name: 'Open preview in a new window' }) as HTMLButtonElement;
     await waitFor(() => expect(switchButton.disabled).toBe(false));
     expect(openButton.disabled).toBe(false);
 
@@ -8363,6 +8606,25 @@ describe('FileViewer tweaks toolbar', () => {
     expect(screen.queryByRole('button', { name: 'Click' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Redo' })).toBeTruthy();
+
+    const editClicks = analyticsTrackMock.mock.calls
+      .filter(([eventName]) => eventName === 'ui_click')
+      .map(([, properties]) => properties)
+      .filter((properties) => properties?.element === 'mark' || properties?.element === 'pen');
+    expect(editClicks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        area: 'artifact_toolbar',
+        element: 'mark',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+      expect.objectContaining({
+        area: 'draw_toolbar',
+        element: 'pen',
+        project_id: 'project-1',
+        project_kind: 'prototype',
+      }),
+    ]));
 
     clickAgentTool('draw-overlay-toggle');
     expect(screen.queryByPlaceholderText('Add a note for this mark')).toBeNull();
