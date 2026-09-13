@@ -16,6 +16,8 @@ import {
   type DesktopExportArtifactResult,
   type DesktopExportPdfInput,
   type DesktopExportPdfResult,
+  type DesktopRenderFramesInput,
+  type DesktopRenderFramesResult,
   type DesktopRenderSlidesInput,
   type DesktopRenderSlidesResult,
   type DesktopUpdateStatusSnapshot,
@@ -31,6 +33,7 @@ import type {
 } from "@open-design/host";
 
 import { renderDeckSlides } from "./deck-capture.js";
+import { renderDeterministicFrames } from "./frame-capture.js";
 import { openFirstPartyMailto } from "./mailto-open.js";
 import { openValidatedDirectory } from "./open-path.js";
 import { exportArtifact as exportArtifactFromHtml } from "./artifact-export.js";
@@ -387,6 +390,7 @@ export type DesktopRuntime = {
   exportArtifact(input: DesktopExportArtifactInput): Promise<DesktopExportArtifactResult>;
   exportPdf(input: DesktopExportPdfInput): Promise<DesktopExportPdfResult>;
   openUpdateDialog(request: OpenDesignHostUpdaterOpenDialogRequest): void;
+  renderFrames(input: DesktopRenderFramesInput): Promise<DesktopRenderFramesResult>;
   renderSlides(input: DesktopRenderSlidesInput): Promise<DesktopRenderSlidesResult>;
   screenshot(input: DesktopScreenshotInput): Promise<DesktopScreenshotResult>;
   show(): void;
@@ -447,6 +451,7 @@ export type DesktopRuntimeOptions = {
    */
   rendererLogPath?: string | null;
   requestQuit?: () => void;
+  onMainWindowReady?: () => void;
   /**
    * Optional pre-created splash window. The packaged entry creates the splash
    * BEFORE awaiting the daemon/web sidecars so the brand animation is on screen
@@ -2845,9 +2850,10 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     // The web bundle is loading in the hidden main window from here on; let
     // the splash status line reflect that final phase while we poll for mount.
     setSplashStage(splash, "workspace");
+    let mounted = false;
     const deadline = Date.now() + WEB_MOUNT_REVEAL_TIMEOUT_MS;
     while (!stopped && !window.isDestroyed() && Date.now() < deadline) {
-      const mounted = await window.webContents
+      mounted = await window.webContents
         .executeJavaScript(`document.documentElement.getAttribute("data-od-app-mounted") === "1"`, true)
         .catch(() => false);
       if (mounted === true) break;
@@ -2861,6 +2867,11 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     const remaining = MIN_SPLASH_MS - (Date.now() - splashStartedAt);
     if (remaining > 0) await delay(remaining);
     revealMainWindow();
+    // A timeout/crash fallback can also reveal a window. Only a mounted,
+    // healthy app is a successful updater desktop observation.
+    if (mounted && !rendererFailed && revealed && !window.isDestroyed()) {
+      try { options.onMainWindowReady?.(); } catch {}
+    }
   };
 
   const schedule = (delayMs: number) => {
@@ -3078,6 +3089,9 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
       window.webContents.send(UPDATER_OPEN_DIALOG_EVENT, request);
       window.show();
       window.focus();
+    },
+    renderFrames(input) {
+      return renderDeterministicFrames(input);
     },
     renderSlides(input) {
       return renderDeckSlides(input);

@@ -44,6 +44,29 @@ declare global {
   }
 }
 
+function isOnboardingReloadRaceError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes('Execution context was destroyed') ||
+    message.includes('Target page, context or browser has been closed') ||
+    message.includes('Target closed')
+  );
+}
+
+async function safeEvaluate<T>(page: Page, pageFunction: () => T): Promise<T | undefined>;
+async function safeEvaluate<T, A>(page: Page, pageFunction: (arg: A) => T, arg: A): Promise<T | undefined>;
+async function safeEvaluate<T, A>(page: Page, pageFunction: (arg: A) => T, arg?: A): Promise<T | undefined> {
+  try {
+    if (arg === undefined) {
+      return await (page.evaluate as unknown as (fn: () => T) => Promise<T>)(pageFunction as () => T);
+    }
+    return await (page.evaluate as unknown as (fn: (arg: A) => T, arg: A) => Promise<T>)(pageFunction, arg as A);
+  } catch (error) {
+    if (isOnboardingReloadRaceError(error)) return undefined;
+    throw error;
+  }
+}
+
 test.describe.configure({ timeout: T.xlong });
 
 test.beforeEach(async ({ page }) => {
@@ -138,8 +161,7 @@ test('[P0] Cloud status loading does not block signed-out Local CLI or BYOK setu
   });
 
   await seedOnboardingConfig(page, config);
-  await page.goto('/onboarding', { waitUntil: 'domcontentloaded' });
-  await expect(connectLandingHeading(page)).toBeVisible({ timeout: T.long });
+  await gotoOnboarding(page);
 
   await expect(cloudPrimaryButton(page)).toBeDisabled();
   await expect(page.getByRole('button', { name: /Local (coding )?agent/i })).toBeEnabled();
@@ -163,8 +185,7 @@ test('[P0] delayed active Cloud login stays out of Local setup and resumes after
   });
 
   await seedOnboardingConfig(page, config);
-  await page.goto('/onboarding', { waitUntil: 'domcontentloaded' });
-  await expect(connectLandingHeading(page)).toBeVisible();
+  await gotoOnboarding(page);
 
   await page.getByRole('button', { name: /Local (coding )?agent/i }).click();
   const localPanel = page.locator('.onboarding-view__setup-panel');
@@ -1276,9 +1297,27 @@ async function wireOnboardingMocks(
     await fulfillAgentsRoute(route, agents);
   });
 
+  // Onboarding validates a settled runtime selection on its own, before
+  // Continue is ever pressed. Without a default handler that background pass
+  // reaches the live daemon and spawns whichever agent CLI the box happens to
+  // have. Cases that care about the verdict register their own handler after
+  // this one, which Playwright matches first.
+  await page.route('**/api/test/connection', async (route) => {
+    await route.fulfill({
+      json: {
+        ok: true,
+        kind: 'success',
+        latencyMs: 12,
+        model: 'default',
+        agentName: 'Codex CLI',
+        sample: 'Connected',
+      },
+    });
+  });
+
   await page.route('**/api/integrations/vela/status', async (route) => {
     statusCalls += 1;
-    await page.evaluate((calls) => {
+    await safeEvaluate(page, (calls) => {
       window.__amrOnboardingStatusCalls = calls;
     }, statusCalls);
     if (options.statusGate) {
@@ -1291,14 +1330,14 @@ async function wireOnboardingMocks(
         body: JSON.stringify({ error: 'status unavailable' }),
       });
       statusResponses += 1;
-      await page.evaluate((responses) => {
+      await safeEvaluate(page, (responses) => {
         window.__amrOnboardingStatusResponses = responses;
       }, statusResponses);
       return;
     }
-    if (loginInFlight && await page.evaluate(() => (
-      window.__amrOnboardingCompleteLogin === true
-    ))) {
+    const shouldCompleteLogin = loginInFlight
+      && (await safeEvaluate(page, () => window.__amrOnboardingCompleteLogin === true)) === true;
+    if (shouldCompleteLogin) {
       loggedIn = true;
       loginInFlight = false;
     }
@@ -1309,11 +1348,11 @@ async function wireOnboardingMocks(
       (!loggedIn &&
         typeof options.delaySignedOutStatusMs === 'number' &&
         options.delaySignedOutStatusMs > 0 &&
-        (await page.evaluate(() => {
+        (await safeEvaluate(page, () => {
           if (!window.__amrOnboardingDelayNextSignedOutStatus) return false;
           window.__amrOnboardingDelayNextSignedOutStatus = false;
           return true;
-        })));
+        })) === true);
     if (shouldDelaySignedOutStatus) {
       const delayMs = shouldDelayAllStatuses
         ? delayAllStatusMs
@@ -1343,11 +1382,11 @@ async function wireOnboardingMocks(
           },
     });
     statusResponses += 1;
-    await page.evaluate((responses) => {
+    await safeEvaluate(page, (responses) => {
       window.__amrOnboardingStatusResponses = responses;
     }, statusResponses);
     if (shouldDelaySignedOutStatus) {
-      await page.evaluate(() => {
+      await safeEvaluate(page, () => {
         window.__amrOnboardingSlowStatusResolved = true;
       });
     }
@@ -1374,7 +1413,7 @@ async function wireOnboardingMocks(
       loggedIn = true;
       loginInFlight = false;
     }
-    await page.evaluate((calls) => {
+    await safeEvaluate(page, (calls) => {
       window.__amrOnboardingLoginCalls = calls;
     }, loginCalls);
     await route.fulfill({
@@ -1392,7 +1431,7 @@ async function wireOnboardingMocks(
     expect(route.request().postDataJSON()).toEqual({ authAttemptId });
     cancelCalls += 1;
     loginInFlight = false;
-    await page.evaluate((calls) => {
+    await safeEvaluate(page, (calls) => {
       window.__amrOnboardingCancelCalls = calls;
     }, cancelCalls);
     await route.fulfill({ json: { canceled: true, pids: [4242] } });
